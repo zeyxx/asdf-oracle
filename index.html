@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="$asdfasdfa K-Metric Dashboard - Proving holder conviction on-chain">
+  <title>$asdfasdfa | K-Metric Dashboard</title>
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="$asdfasdfa K-Metric">
+  <meta property="og:description" content="Price is noise. K is signal. On-chain verified holder conviction.">
+  <meta property="og:type" content="website">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="css/style.css">
+
+  <!-- html2canvas for screenshot -->
+  <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <span class="logo-fire">🔥</span>
+        <span class="logo-text">$asdfasdfa</span>
+      </div>
+      <div class="status-badge">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">connecting...</span>
+      </div>
+    </header>
+
+    <!-- Ticker -->
+    <div class="ticker-wrap">
+      <div class="ticker" id="ticker">
+        <div class="ticker-item">📊 K-metric tracks holder conviction on-chain</div>
+        <div class="ticker-item">🔥 <span class="up" id="ticker-k">--</span>% of holders maintained position</div>
+        <div class="ticker-item">💎 Diamond hands verified via Helius RPC</div>
+        <div class="ticker-item">📈 Price is noise · K is signal</div>
+        <div class="ticker-item">⛓️ Real data · No fake metrics</div>
+        <div class="ticker-item">🧪 Chaos is a filter</div>
+        <!-- Duplicate for seamless scroll -->
+        <div class="ticker-item">📊 K-metric tracks holder conviction on-chain</div>
+        <div class="ticker-item">🔥 <span class="up" id="ticker-k-2">--</span>% of holders maintained position</div>
+        <div class="ticker-item">💎 Diamond hands verified via Helius RPC</div>
+        <div class="ticker-item">📈 Price is noise · K is signal</div>
+        <div class="ticker-item">⛓️ Real data · No fake metrics</div>
+        <div class="ticker-item">🧪 Chaos is a filter</div>
+      </div>
+    </div>
+
+    <!-- Main K-Metric Panel -->
+    <main class="panel">
+      <div class="panel-header">
+        <span class="panel-title">holder conviction metric</span>
+        <span class="panel-title">$asdfasdfa</span>
+      </div>
+
+      <div class="k-display">
+        <div class="k-labels">
+          <div class="label-noise">price is noise</div>
+          <div class="label-signal">K is signal</div>
+        </div>
+
+        <div class="k-metric">
+          <span class="k-letter">K</span>
+          <span class="k-equals">=</span>
+          <span class="k-value loading" id="k-value">--%</span>
+        </div>
+
+        <div class="k-definition">holders who maintained or increased position</div>
+        <div class="k-insight">behavioral constant · on-chain verified · updated live</div>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat">
+          <div class="stat-value" id="holders-count">--</div>
+          <div class="stat-label">holders tracked</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value gold" id="never-sold">--%</div>
+          <div class="stat-label">never sold</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value green" id="accumulated">--%</div>
+          <div class="stat-label">accumulated</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- History Panel -->
+    <section class="panel history-panel">
+      <div class="history-header">
+        <span class="panel-title">K history</span>
+        <span class="panel-title" id="history-count">0 snapshots</span>
+      </div>
+      <div class="history-body">
+        <div class="chart-container" id="chart-container">
+          <svg id="chart-svg" viewBox="0 0 400 120" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="chart-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" style="stop-color:#4ade80;stop-opacity:0.4" />
+                <stop offset="100%" style="stop-color:#4ade80;stop-opacity:0" />
+              </linearGradient>
+            </defs>
+            <path id="chart-area" fill="url(#chart-gradient)" />
+            <path id="chart-line" fill="none" stroke="#4ade80" stroke-width="2" />
+            <g id="chart-dots"></g>
+          </svg>
+          <div class="no-data" id="no-data-msg">No historical data yet</div>
+        </div>
+        <div class="chart-labels" id="chart-labels" style="display: none;">
+          <span id="chart-start">--</span>
+          <span id="chart-end">Today</span>
+        </div>
+      </div>
+      <div class="poh-status">
+        <span class="poh-label">PoH Slot:</span>
+        <span class="poh-value" id="poh-slot">--</span>
+      </div>
+    </section>
+
+    <!-- Actions -->
+    <div class="actions-bar">
+      <button class="btn btn-primary" id="refresh-btn">
+        <span>🔄</span> Refresh K
+      </button>
+      <button class="btn btn-twitter" id="share-btn">
+        <span>📸</span> Screenshot & Share
+      </button>
+    </div>
+
+    <!-- Footer Stats -->
+    <div class="footer-stats">
+      <div class="footer-stat">
+        <div class="footer-stat-value" id="avg-hold">--</div>
+        <div class="footer-stat-label">avg hold days</div>
+      </div>
+      <div class="footer-stat">
+        <div class="footer-stat-value" id="og-pct">--%</div>
+        <div class="footer-stat-label">OG holders</div>
+      </div>
+      <div class="footer-stat">
+        <div class="footer-stat-value" id="token-price">--</div>
+        <div class="footer-stat-label">price</div>
+      </div>
+      <div class="footer-stat">
+        <div class="footer-stat-value" id="last-update">--</div>
+        <div class="footer-stat-label">last update</div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="footer-links">
+        Powered by <a href="https://helius.dev" target="_blank">Helius</a>
+        · <a href="https://alonisthe.dev" target="_blank">alonisthe.dev</a>
+      </div>
+      <div class="footer-motto">chaos is a filter 🔥</div>
+    </footer>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script type="module">
+    // ============================================
+    // Config
+    // ============================================
+    const API_BASE = '/k-metric';
+
+    // ============================================
+    // DOM Elements
+    // ============================================
+    const elements = {
+      statusDot: document.getElementById('status-dot'),
+      statusText: document.getElementById('status-text'),
+      kValue: document.getElementById('k-value'),
+      holdersCount: document.getElementById('holders-count'),
+      neverSold: document.getElementById('never-sold'),
+      accumulated: document.getElementById('accumulated'),
+      tickerK: document.getElementById('ticker-k'),
+      tickerK2: document.getElementById('ticker-k-2'),
+      chartContainer: document.getElementById('chart-container'),
+      chartLabels: document.getElementById('chart-labels'),
+      chartStart: document.getElementById('chart-start'),
+      historyCount: document.getElementById('history-count'),
+      avgHold: document.getElementById('avg-hold'),
+      ogPct: document.getElementById('og-pct'),
+      tokenPrice: document.getElementById('token-price'),
+      lastUpdate: document.getElementById('last-update'),
+      refreshBtn: document.getElementById('refresh-btn'),
+      shareBtn: document.getElementById('share-btn'),
+      toast: document.getElementById('toast'),
+    };
+
+    // ============================================
+    // State
+    // ============================================
+    let currentData = null;
+    let isRefreshing = false;
+
+    // ============================================
+    // "This is Fine" Mode 🐕🔥
+    // ============================================
+    const thisIsFineQuotes = [
+      { text: "this is fine 🐕🔥", sub: "fetching on-chain data..." },
+      { text: "todo esta bien 🔥", sub: "el caos es un filtro..." },
+      { text: "c'est fine 🐕", sub: "on brûle les données pour toi..." },
+      { text: "大丈夫 🔥", sub: "daijoubu... probably..." },
+      { text: "все хорошо 🐕🔥", sub: "just vibing in the fire..." },
+      { text: "🐕 woof 🔥", sub: "blockchain go brrr..." },
+      { text: "cope.exe 🔥", sub: "loading hopium..." },
+      { text: "wen K? 🐕", sub: "soon™..." },
+      { text: "gm 🔥", sub: "grinding on-chain data..." },
+      { text: "wagmi 🐕🔥", sub: "trust the process..." },
+    ];
+
+    let thisIsFineInterval = null;
+    let quoteIndex = 0;
+
+    function enterThisIsFineMode() {
+      elements.kValue.classList.add('this-is-fine');
+      updateThisIsFineQuote();
+      thisIsFineInterval = setInterval(updateThisIsFineQuote, 3000);
+    }
+
+    function exitThisIsFineMode() {
+      elements.kValue.classList.remove('this-is-fine');
+      if (thisIsFineInterval) {
+        clearInterval(thisIsFineInterval);
+        thisIsFineInterval = null;
+      }
+      document.querySelector('.k-definition').textContent = 'holders who maintained or increased position';
+    }
+
+    function updateThisIsFineQuote() {
+      const quote = thisIsFineQuotes[quoteIndex % thisIsFineQuotes.length];
+      elements.kValue.textContent = quote.text;
+      document.querySelector('.k-definition').textContent = quote.sub;
+      quoteIndex++;
+    }
+
+    // ============================================
+    // API Functions
+    // ============================================
+    async function fetchKMetric() {
+      const res = await fetch(API_BASE);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    }
+
+    async function fetchHistory() {
+      const res = await fetch(`${API_BASE}/history?days=30`);
+      if (!res.ok) return { history: [] };
+      return await res.json();
+    }
+
+    async function fetchStats() {
+      const res = await fetch(`${API_BASE}/stats`);
+      if (!res.ok) return null;
+      return await res.json();
+    }
+
+    // ============================================
+    // UI Functions
+    // ============================================
+    function updateDisplay(data) {
+      if (!data) return;
+      currentData = data;
+
+      exitThisIsFineMode();
+
+      // K value with color
+      const k = data.k ?? 0;
+      elements.kValue.textContent = `${k}%`;
+      elements.kValue.className = 'k-value';
+      if (k < 50) {
+        elements.kValue.classList.add('danger');
+      } else if (k < 70) {
+        elements.kValue.classList.add('warning');
+      }
+
+      // Stats
+      elements.holdersCount.textContent = (data.holders ?? 0).toLocaleString();
+      elements.neverSold.textContent = `${data.neverSoldPct ?? 0}%`;
+      elements.accumulated.textContent = `${data.accumulatorsPct ?? data.accumulatedPct ?? 0}%`;
+
+      // Ticker
+      elements.tickerK.textContent = k;
+      elements.tickerK2.textContent = k;
+
+      // Footer stats
+      elements.avgHold.textContent = data.avgHoldDays ?? '--';
+      elements.ogPct.textContent = `${data.ogPct ?? 0}%`;
+      if (data.token?.price && data.token.price > 0) {
+        // Format price nicely
+        const price = data.token.price;
+        if (price < 0.0001) {
+          elements.tokenPrice.textContent = `$${price.toExponential(2)}`;
+        } else if (price < 1) {
+          elements.tokenPrice.textContent = `$${price.toFixed(6)}`;
+        } else {
+          elements.tokenPrice.textContent = `$${price.toFixed(4)}`;
+        }
+      } else {
+        elements.tokenPrice.textContent = '--';
+      }
+      elements.lastUpdate.textContent = new Date().toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      updateStatus('online', 'live');
+    }
+
+    function updateStatus(status, text) {
+      elements.statusDot.className = 'status-dot';
+      if (status === 'offline') elements.statusDot.classList.add('offline');
+      if (status === 'warning') elements.statusDot.classList.add('warning');
+      elements.statusText.textContent = text;
+    }
+
+    function showToast(message, isError = false) {
+      elements.toast.textContent = message;
+      elements.toast.className = 'toast' + (isError ? ' error' : '');
+      elements.toast.classList.add('show');
+      setTimeout(() => elements.toast.classList.remove('show'), 3000);
+    }
+
+    // ============================================
+    // History Chart (SVG Line Chart)
+    // ============================================
+    async function renderHistory() {
+      try {
+        const { history } = await fetchHistory();
+        elements.historyCount.textContent = `${history.length} snapshots`;
+
+        const noDataMsg = document.getElementById('no-data-msg');
+        const chartSvg = document.getElementById('chart-svg');
+
+        if (history.length < 1) {
+          noDataMsg.style.display = 'block';
+          chartSvg.style.display = 'none';
+          elements.chartLabels.style.display = 'none';
+          return;
+        }
+
+        noDataMsg.style.display = 'none';
+        chartSvg.style.display = 'block';
+        elements.chartLabels.style.display = 'flex';
+
+        // Reverse to show oldest first
+        const data = [...history].reverse();
+
+        const width = 400;
+        const height = 120;
+        const padding = 10;
+
+        const minK = Math.min(...data.map(h => h.k));
+        const maxK = Math.max(...data.map(h => h.k));
+        const range = maxK - minK || 10;
+
+        // Generate points
+        const points = data.map((item, i) => {
+          const x = padding + (i / (data.length - 1 || 1)) * (width - padding * 2);
+          const y = height - padding - ((item.k - minK) / range) * (height - padding * 2);
+          return { x, y, k: item.k, date: item.date };
+        });
+
+        // Create line path
+        const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+
+        // Create area path (closed polygon)
+        const areaPath = linePath + ` L ${points[points.length - 1].x} ${height} L ${points[0].x} ${height} Z`;
+
+        document.getElementById('chart-line').setAttribute('d', linePath);
+        document.getElementById('chart-area').setAttribute('d', areaPath);
+
+        // Add dots with tooltips
+        const dotsGroup = document.getElementById('chart-dots');
+        dotsGroup.innerHTML = '';
+
+        points.forEach((p, i) => {
+          const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('cx', p.x);
+          circle.setAttribute('cy', p.y);
+          circle.setAttribute('r', i === points.length - 1 ? 5 : 3);
+          circle.setAttribute('fill', i === points.length - 1 ? '#4ade80' : '#fb923c');
+          circle.setAttribute('class', 'chart-dot');
+
+          // Tooltip on hover
+          circle.innerHTML = `<title>${p.date.split('T')[0]}: K=${p.k}%</title>`;
+
+          dotsGroup.appendChild(circle);
+        });
+
+        // Update labels
+        elements.chartStart.textContent = data[0].date.split('T')[0];
+        elements.chartEnd = document.getElementById('chart-end');
+        if (elements.chartEnd) {
+          elements.chartEnd.textContent = 'Today';
+        }
+
+      } catch (e) {
+        console.error('Failed to load history:', e);
+      }
+    }
+
+    async function updatePoHStatus() {
+      try {
+        const stats = await fetchStats();
+        if (stats && stats.lastProcessedSlot) {
+          const pohSlot = document.getElementById('poh-slot');
+          if (pohSlot) {
+            pohSlot.textContent = stats.lastProcessedSlot.toLocaleString();
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load PoH status:', e);
+      }
+    }
+
+    // ============================================
+    // Actions
+    // ============================================
+    async function refresh() {
+      if (isRefreshing) return;
+      isRefreshing = true;
+      elements.refreshBtn.disabled = true;
+
+      try {
+        updateStatus('warning', 'refreshing...');
+        enterThisIsFineMode();
+
+        const data = await fetchKMetric();
+
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        updateDisplay(data);
+        await renderHistory();
+        await updatePoHStatus();
+        showToast('K-Metric updated! 🔥');
+      } catch (error) {
+        console.error('Refresh error:', error);
+        showToast('Failed to fetch data', true);
+        updateStatus('offline', 'error');
+      } finally {
+        isRefreshing = false;
+        elements.refreshBtn.disabled = false;
+      }
+    }
+
+    async function shareOnTwitter() {
+      if (!currentData) {
+        showToast('No data to share', true);
+        return;
+      }
+
+      showToast('Generating screenshot... 📸');
+      elements.shareBtn.disabled = true;
+
+      try {
+        // Capture the main dashboard area
+        const appElement = document.querySelector('.app');
+
+        // Hide elements we don't want in screenshot
+        const actionsBar = document.querySelector('.actions-bar');
+        const footer = document.querySelector('.footer');
+        const fireParticles = document.querySelectorAll('.fire-particle');
+
+        actionsBar.style.display = 'none';
+        footer.style.display = 'none';
+        fireParticles.forEach(p => p.style.display = 'none');
+
+        // Generate screenshot
+        const canvas = await html2canvas(appElement, {
+          backgroundColor: '#1a0a02',
+          scale: 2, // Higher quality
+          logging: false,
+          useCORS: true,
+        });
+
+        // Restore hidden elements
+        actionsBar.style.display = '';
+        footer.style.display = '';
+        fireParticles.forEach(p => p.style.display = '');
+
+        // Convert to blob and download
+        canvas.toBlob(async (blob) => {
+          // Create download link
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `asdfasdfa-k-metric-${currentData.k}pct.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          showToast('Screenshot saved! Now share on Twitter 🔥');
+
+          // Open Twitter with pre-filled text
+          const accPct = currentData.accumulatorsPct ?? currentData.accumulatedPct ?? 0;
+          const text = `$asdfasdfa K = ${currentData.k}%
+
+📊 ${currentData.holders} holders tracked
+💎 ${currentData.neverSoldPct}% never sold
+📈 ${accPct}% accumulated
+
+price is noise, K is signal
+chaos is a filter 🔥
+
+#asdfasdfa #Solana`;
+
+          // Small delay to let user see the downloaded file
+          setTimeout(() => {
+            const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+            window.open(twitterUrl, '_blank');
+          }, 500);
+
+        }, 'image/png');
+
+      } catch (error) {
+        console.error('Screenshot error:', error);
+        showToast('Screenshot failed, opening Twitter anyway...', true);
+
+        // Fallback: just open Twitter without screenshot
+        const accPct = currentData.accumulatorsPct ?? currentData.accumulatedPct ?? 0;
+        const text = `$asdfasdfa K = ${currentData.k}%
+
+📊 ${currentData.holders} holders tracked
+💎 ${currentData.neverSoldPct}% never sold
+📈 ${accPct}% accumulated
+
+price is noise, K is signal
+chaos is a filter 🔥
+
+#asdfasdfa #Solana`;
+        const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+        window.open(twitterUrl, '_blank');
+      } finally {
+        elements.shareBtn.disabled = false;
+      }
+    }
+
+    // ============================================
+    // Fire Particles
+    // ============================================
+    function startFireParticles() {
+      setInterval(() => {
+        if (document.hidden) return;
+
+        const particle = document.createElement('div');
+        particle.className = 'fire-particle';
+        particle.textContent = '🔥';
+        particle.style.left = Math.random() * 100 + '%';
+        particle.style.bottom = '0';
+        document.body.appendChild(particle);
+
+        setTimeout(() => particle.remove(), 4000);
+      }, 2000);
+    }
+
+    // ============================================
+    // Init
+    // ============================================
+    async function init() {
+      console.log('[App] Initializing K-Metric Dashboard...');
+
+      elements.refreshBtn.addEventListener('click', refresh);
+      elements.shareBtn.addEventListener('click', shareOnTwitter);
+
+      // Auto-refresh on tab visible
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && !isRefreshing) refresh();
+      });
+
+      startFireParticles();
+      await refresh();
+    }
+
+    init();
+  </script>
+</body>
+</html>

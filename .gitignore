@@ -1,0 +1,32 @@
+# Environment variables (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Database (regenerated via backfill)
+data/*.db
+data/backups/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Dependencies
+node_modules/
+
+# Old files
+js/env.js
+k_analyzer.py
+k_tweet.html
+.tx-cache.json
+asdf-k-metric-*.json
