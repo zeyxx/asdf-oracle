@@ -9,6 +9,9 @@ import db from './db.js';
 import { pct, log } from './utils.js';
 
 const MIN_BALANCE = parseInt(process.env.MIN_BALANCE || '1000');
+const TOKEN_LAUNCH_TS = parseInt(process.env.TOKEN_LAUNCH_TS || '0');
+const OG_EARLY_WINDOW = parseInt(process.env.OG_EARLY_WINDOW || '21') * 86400; // days to seconds
+const OG_HOLD_THRESHOLD = parseInt(process.env.OG_HOLD_THRESHOLD || '55') * 86400; // days to seconds
 
 /**
  * Calculate K-Metric from stored wallet data
@@ -40,9 +43,15 @@ export async function calculate() {
     const retention = firstBuyNum > 0 ? balanceNum / firstBuyNum : 1;
 
     // Calculate hold days
+    const now = Math.floor(Date.now() / 1000);
     const holdDays = wallet.first_buy_ts
-      ? Math.floor((Date.now() / 1000 - wallet.first_buy_ts) / 86400)
+      ? Math.floor((now - wallet.first_buy_ts) / 86400)
       : 0;
+
+    // OG = early buyer (within first 21 days) AND held for 55+ days
+    const isEarlyBuyer = wallet.first_buy_ts && wallet.first_buy_ts <= TOKEN_LAUNCH_TS + OG_EARLY_WINDOW;
+    const hasHeldLongEnough = wallet.first_buy_ts && (now - wallet.first_buy_ts) >= OG_HOLD_THRESHOLD;
+    const isOG = isEarlyBuyer && hasHeldLongEnough;
 
     results.push({
       address: wallet.address,
@@ -52,6 +61,7 @@ export async function calculate() {
       retention,
       neverSold: sent === 0n,
       holdDays,
+      isOG,
     });
   }
 
@@ -72,8 +82,8 @@ export async function calculate() {
     results.reduce((sum, r) => sum + r.holdDays, 0) / total
   );
 
-  // OG holders (held for 30+ days)
-  const og = results.filter((r) => r.holdDays >= 30).length;
+  // OG holders (early buyers who held 55+ days)
+  const og = results.filter((r) => r.isOG).length;
 
   const elapsed = Date.now() - startTime;
   log('INFO', `K-Metric calculated: K=${k}% (${elapsed}ms)`);

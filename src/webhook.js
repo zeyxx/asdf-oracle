@@ -8,6 +8,7 @@
 import crypto from 'crypto';
 import db from './db.js';
 import calculator from './calculator.js';
+import walletScore from './wallet-score.js';
 import { log } from './utils.js';
 import security from './security.js';
 
@@ -99,6 +100,9 @@ export async function processEvents(events) {
 
           // Update sender wallet
           await updateWalletFromTransfer(fromUserAccount, -amount, blockTime, signature);
+
+          // Queue K_wallet recalculation
+          await walletScore.enqueueWallet(fromUserAccount);
         }
 
         if (toUserAccount) {
@@ -112,6 +116,9 @@ export async function processEvents(events) {
 
           // Update receiver wallet
           await updateWalletFromTransfer(toUserAccount, amount, blockTime, signature);
+
+          // Queue K_wallet recalculation
+          await walletScore.enqueueWallet(toUserAccount);
         }
 
         processed++;

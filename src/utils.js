@@ -10,6 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Load environment variables from .env file
+ * Does NOT overwrite existing env vars (command line takes precedence)
  */
 export function loadEnv() {
   const envPath = join(__dirname, '..', '.env');
@@ -18,7 +19,11 @@ export function loadEnv() {
     content.split('\n').forEach((line) => {
       const [key, ...valueParts] = line.split('=');
       if (key && valueParts.length && !key.startsWith('#')) {
-        process.env[key.trim()] = valueParts.join('=').trim();
+        const trimmedKey = key.trim();
+        // Don't overwrite existing env vars (command line precedence)
+        if (process.env[trimmedKey] === undefined) {
+          process.env[trimmedKey] = valueParts.join('=').trim();
+        }
       }
     });
   }

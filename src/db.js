@@ -14,6 +14,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
 const DB_PATH = join(DATA_DIR, 'k-metric.db');
 
+// OG configuration
+const TOKEN_LAUNCH_TS = parseInt(process.env.TOKEN_LAUNCH_TS || '0');
+const OG_EARLY_WINDOW = parseInt(process.env.OG_EARLY_WINDOW || '21') * 86400;
+const OG_HOLD_THRESHOLD = parseInt(process.env.OG_HOLD_THRESHOLD || '55') * 86400;
+
 // Ensure data directory exists
 if (!existsSync(DATA_DIR)) {
   mkdirSync(DATA_DIR, { recursive: true });
@@ -59,9 +64,24 @@ function migrate() {
       total_received TEXT DEFAULT '0',
       total_sent TEXT DEFAULT '0',
       current_balance TEXT DEFAULT '0',
+      peak_balance TEXT DEFAULT '0',
       last_tx_signature TEXT,
       updated_at INTEGER DEFAULT (unixepoch())
     )`,
+
+    // Migration: Add peak_balance column to existing wallets table
+    `ALTER TABLE wallets ADD COLUMN peak_balance TEXT DEFAULT '0'`,
+
+    // Migration: Backfill peak_balance for existing wallets
+    // peak_balance = MAX(current_balance, first_buy_amount)
+    // This is a lower-bound estimate; actual peak may have been higher
+    `UPDATE wallets SET peak_balance =
+      CASE
+        WHEN CAST(current_balance AS INTEGER) > CAST(COALESCE(first_buy_amount, '0') AS INTEGER)
+        THEN current_balance
+        ELSE COALESCE(first_buy_amount, current_balance)
+      END
+    WHERE peak_balance = '0' OR peak_balance IS NULL`,
 
     // Transactions table - stores processed transactions
     // slot = Solana PoH slot number (monotonically increasing, used as ordering key)
@@ -95,12 +115,31 @@ function migrate() {
       updated_at INTEGER DEFAULT (unixepoch())
     )`,
 
+    // Migration: Add k_wallet columns (global K across all PumpFun tokens)
+    `ALTER TABLE wallets ADD COLUMN k_wallet INTEGER DEFAULT NULL`,
+    `ALTER TABLE wallets ADD COLUMN k_wallet_tokens INTEGER DEFAULT NULL`,
+    `ALTER TABLE wallets ADD COLUMN k_wallet_updated_at INTEGER DEFAULT NULL`,
+    `ALTER TABLE wallets ADD COLUMN k_wallet_slot INTEGER DEFAULT NULL`,
+
+    // K_wallet job queue (scale-ready, can migrate to Redis/SQS later)
+    `CREATE TABLE IF NOT EXISTS k_wallet_queue (
+      address TEXT PRIMARY KEY,
+      priority INTEGER DEFAULT 0,
+      attempts INTEGER DEFAULT 0,
+      last_error TEXT,
+      created_at INTEGER DEFAULT (unixepoch()),
+      locked_until INTEGER DEFAULT NULL
+    )`,
+
     // Indexes for performance
     `CREATE INDEX IF NOT EXISTS idx_wallets_balance ON wallets(current_balance)`,
+    `CREATE INDEX IF NOT EXISTS idx_wallets_peak ON wallets(peak_balance)`,
+    `CREATE INDEX IF NOT EXISTS idx_wallets_k_wallet ON wallets(k_wallet)`,
     `CREATE INDEX IF NOT EXISTS idx_transactions_wallet ON transactions(wallet)`,
     `CREATE INDEX IF NOT EXISTS idx_transactions_time ON transactions(block_time)`,
     `CREATE INDEX IF NOT EXISTS idx_transactions_slot ON transactions(slot)`,
     `CREATE INDEX IF NOT EXISTS idx_snapshots_time ON snapshots(created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_k_wallet_queue_next ON k_wallet_queue(locked_until, priority DESC)`,
   ];
 
   for (const sql of migrations) {
@@ -149,25 +188,32 @@ export async function getDb() {
 export async function upsertWallet(wallet) {
   const db = await getDb();
   const stmt = db.prepare(`
-    INSERT INTO wallets (address, first_buy_ts, first_buy_amount, total_received, total_sent, current_balance, last_tx_signature, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
+    INSERT INTO wallets (address, first_buy_ts, first_buy_amount, total_received, total_sent, current_balance, peak_balance, last_tx_signature, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
     ON CONFLICT(address) DO UPDATE SET
       first_buy_ts = COALESCE(wallets.first_buy_ts, excluded.first_buy_ts),
       first_buy_amount = CASE WHEN wallets.first_buy_ts IS NULL THEN excluded.first_buy_amount ELSE wallets.first_buy_amount END,
       total_received = wallets.total_received + excluded.total_received,
       total_sent = wallets.total_sent + excluded.total_sent,
       current_balance = excluded.current_balance,
+      peak_balance = CASE
+        WHEN CAST(excluded.current_balance AS INTEGER) > CAST(COALESCE(wallets.peak_balance, '0') AS INTEGER)
+        THEN excluded.current_balance
+        ELSE wallets.peak_balance
+      END,
       last_tx_signature = excluded.last_tx_signature,
       updated_at = unixepoch()
   `);
   // Convert to strings to handle large numbers
+  const balance = String(wallet.balance || 0);
   stmt.run(
     wallet.address,
     wallet.firstBuyTs,
     String(wallet.firstBuyAmount || 0),
     String(wallet.received || 0),
     String(wallet.sent || 0),
-    String(wallet.balance || 0),
+    balance,
+    balance, // peak_balance = current on insert
     wallet.lastTxSig
   );
 }
@@ -184,7 +230,92 @@ export async function getWallets(minBalance = 0) {
     total_received: BigInt(row.total_received || '0'),
     total_sent: BigInt(row.total_sent || '0'),
     current_balance: BigInt(row.current_balance || '0'),
+    peak_balance: BigInt(row.peak_balance || '0'),
   }));
+}
+
+/**
+ * K_wallet Classification (same as K_token)
+ * Based on retention (current / first_buy)
+ * @param {number} retention - retention ratio
+ * @returns {string} - accumulator | holder | reducer | extractor
+ */
+export function classifyWalletK(retention) {
+  if (retention >= 1.5) return 'accumulator';  // Grew position 50%+
+  if (retention >= 1.0) return 'holder';       // Maintained position
+  if (retention >= 0.5) return 'reducer';      // Partial exit
+  return 'extractor';                           // Major exit
+}
+
+/**
+ * Get K-score for a specific wallet
+ * K_wallet uses same retention as K_token: current / first_buy (uncapped)
+ */
+export async function getWalletKScore(address) {
+  const db = await getDb();
+  const stmt = db.prepare('SELECT * FROM wallets WHERE address = ?');
+  const row = stmt.get(address);
+
+  if (!row) {
+    return null;
+  }
+
+  const currentBalance = BigInt(row.current_balance || '0');
+  const firstBuyAmount = BigInt(row.first_buy_amount || '0');
+  const totalSent = BigInt(row.total_sent || '0');
+
+  // Calculate retention: current / first_buy (same as K_token, uncapped)
+  let retention = 1.0;
+  if (firstBuyAmount > 0n) {
+    retention = Number(currentBalance) / Number(firstBuyAmount);
+  }
+
+  // Calculate hold days
+  const now = Math.floor(Date.now() / 1000);
+  const holdDays = row.first_buy_ts
+    ? Math.floor((now - row.first_buy_ts) / 86400)
+    : 0;
+
+  // OG = early buyer (within first 21 days) AND held for 55+ days
+  const isEarlyBuyer = row.first_buy_ts && row.first_buy_ts <= TOKEN_LAUNCH_TS + OG_EARLY_WINDOW;
+  const hasHeldLongEnough = row.first_buy_ts && (now - row.first_buy_ts) >= OG_HOLD_THRESHOLD;
+  const isOG = Boolean(isEarlyBuyer && hasHeldLongEnough);
+
+  return {
+    address: row.address,
+    current_balance: currentBalance.toString(),
+    first_buy_amount: firstBuyAmount.toString(),
+    retention: Math.round(retention * 1000) / 1000, // 3 decimal precision
+    classification: classifyWalletK(retention),
+    neverSold: totalSent === 0n,
+    holdDays,
+    isOG,
+    first_seen_at: row.first_buy_ts || row.updated_at,
+    last_updated_at: row.updated_at,
+  };
+}
+
+/**
+ * Update wallet balance and track peak
+ * Called by webhook and polling handlers
+ */
+export async function updateWalletBalance(address, newBalance) {
+  const db = await getDb();
+  const balanceStr = String(newBalance);
+
+  const stmt = db.prepare(`
+    INSERT INTO wallets (address, current_balance, peak_balance, updated_at)
+    VALUES (?, ?, ?, unixepoch())
+    ON CONFLICT(address) DO UPDATE SET
+      current_balance = ?,
+      peak_balance = CASE
+        WHEN CAST(? AS INTEGER) > CAST(COALESCE(wallets.peak_balance, '0') AS INTEGER)
+        THEN ?
+        ELSE wallets.peak_balance
+      END,
+      updated_at = unixepoch()
+  `);
+  stmt.run(address, balanceStr, balanceStr, balanceStr, balanceStr, balanceStr);
 }
 
 export async function saveSnapshot(data) {
@@ -256,6 +387,163 @@ export async function getStats() {
   };
 }
 
+// ============================================
+// K_wallet Queue System (scale-ready)
+// ============================================
+
+/**
+ * Enqueue a wallet for K_wallet calculation
+ * Uses UPSERT - if already queued, just updates priority
+ */
+export async function enqueueKWallet(address, priority = 0) {
+  const db = await getDb();
+  const stmt = db.prepare(`
+    INSERT INTO k_wallet_queue (address, priority, created_at)
+    VALUES (?, ?, unixepoch())
+    ON CONFLICT(address) DO UPDATE SET
+      priority = MAX(k_wallet_queue.priority, excluded.priority),
+      locked_until = NULL
+  `);
+  stmt.run(address, priority);
+}
+
+/**
+ * Enqueue multiple wallets (batch)
+ */
+export async function enqueueKWalletBatch(addresses, priority = 0) {
+  const db = await getDb();
+  const stmt = db.prepare(`
+    INSERT INTO k_wallet_queue (address, priority, created_at)
+    VALUES (?, ?, unixepoch())
+    ON CONFLICT(address) DO UPDATE SET
+      priority = MAX(k_wallet_queue.priority, excluded.priority),
+      locked_until = NULL
+  `);
+  for (const address of addresses) {
+    stmt.run(address, priority);
+  }
+}
+
+/**
+ * Get next wallet to process from queue
+ * Uses locking to prevent race conditions
+ * Returns null if queue is empty
+ */
+export async function dequeueKWallet() {
+  const db = await getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const lockDuration = 300; // 5 min lock
+
+  // Get next unlocked item (highest priority first)
+  const stmt = db.prepare(`
+    SELECT address FROM k_wallet_queue
+    WHERE locked_until IS NULL OR locked_until < ?
+    ORDER BY priority DESC, created_at ASC
+    LIMIT 1
+  `);
+  const row = stmt.get(now);
+
+  if (!row) return null;
+
+  // Lock it
+  const lockStmt = db.prepare(`
+    UPDATE k_wallet_queue SET locked_until = ? WHERE address = ?
+  `);
+  lockStmt.run(now + lockDuration, row.address);
+
+  return row.address;
+}
+
+/**
+ * Mark K_wallet calculation as complete
+ * Removes from queue and updates wallets table
+ * @param {string} address - Wallet address
+ * @param {number|null} kWallet - K_wallet percentage (0-100)
+ * @param {number} tokensAnalyzed - Number of tokens analyzed
+ * @param {number} slot - PoH slot at time of calculation (for ordering)
+ */
+export async function completeKWallet(address, kWallet, tokensAnalyzed, slot = null) {
+  const db = await getDb();
+
+  // Update wallets table with PoH slot
+  const updateStmt = db.prepare(`
+    UPDATE wallets SET
+      k_wallet = ?,
+      k_wallet_tokens = ?,
+      k_wallet_updated_at = unixepoch(),
+      k_wallet_slot = ?
+    WHERE address = ?
+  `);
+  updateStmt.run(kWallet, tokensAnalyzed, slot, address);
+
+  // Remove from queue
+  const deleteStmt = db.prepare('DELETE FROM k_wallet_queue WHERE address = ?');
+  deleteStmt.run(address);
+}
+
+/**
+ * Mark K_wallet calculation as failed (will retry)
+ */
+export async function failKWallet(address, error) {
+  const db = await getDb();
+  const stmt = db.prepare(`
+    UPDATE k_wallet_queue SET
+      attempts = attempts + 1,
+      last_error = ?,
+      locked_until = NULL
+    WHERE address = ?
+  `);
+  stmt.run(error, address);
+}
+
+/**
+ * Remove stale entries (too many attempts)
+ */
+export async function cleanupKWalletQueue(maxAttempts = 5) {
+  const db = await getDb();
+  const stmt = db.prepare('DELETE FROM k_wallet_queue WHERE attempts >= ?');
+  stmt.run(maxAttempts);
+}
+
+/**
+ * Get queue stats
+ */
+export async function getKWalletQueueStats() {
+  const db = await getDb();
+  const now = Math.floor(Date.now() / 1000);
+
+  const total = db.prepare('SELECT COUNT(*) as count FROM k_wallet_queue').get();
+  const pending = db.prepare('SELECT COUNT(*) as count FROM k_wallet_queue WHERE locked_until IS NULL OR locked_until < ?').get(now);
+  const processing = db.prepare('SELECT COUNT(*) as count FROM k_wallet_queue WHERE locked_until >= ?').get(now);
+  const withKWallet = db.prepare('SELECT COUNT(*) as count FROM wallets WHERE k_wallet IS NOT NULL').get();
+
+  return {
+    queue_total: total?.count || 0,
+    queue_pending: pending?.count || 0,
+    queue_processing: processing?.count || 0,
+    wallets_with_k_wallet: withKWallet?.count || 0,
+  };
+}
+
+/**
+ * Get wallets that need K_wallet calculation (not yet calculated or stale)
+ * Respects MIN_BALANCE filter - only process significant holders
+ */
+export async function getWalletsNeedingKWallet(limit = 100, maxAgeSeconds = 86400) {
+  const db = await getDb();
+  const cutoff = Math.floor(Date.now() / 1000) - maxAgeSeconds;
+  const minBalance = parseInt(process.env.MIN_BALANCE || '1000');
+
+  const stmt = db.prepare(`
+    SELECT address FROM wallets
+    WHERE CAST(current_balance AS INTEGER) >= ?
+      AND (k_wallet_updated_at IS NULL OR k_wallet_updated_at < ?)
+    ORDER BY k_wallet_updated_at ASC NULLS FIRST
+    LIMIT ?
+  `);
+  return stmt.all(minBalance, cutoff, limit).map(r => r.address);
+}
+
 export default {
   getDb,
   upsertWallet,
@@ -268,4 +556,17 @@ export default {
   getLastProcessedSlot,
   getLastProcessedSignature,
   getStats,
+  // K_wallet functions
+  classifyWalletK,
+  getWalletKScore,
+  updateWalletBalance,
+  // K_wallet queue
+  enqueueKWallet,
+  enqueueKWalletBatch,
+  dequeueKWallet,
+  completeKWallet,
+  failKWallet,
+  cleanupKWalletQueue,
+  getKWalletQueueStats,
+  getWalletsNeedingKWallet,
 };

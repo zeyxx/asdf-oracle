@@ -17,6 +17,7 @@ import router from './router.js';
 import db from './db.js';
 import calculator from './calculator.js';
 import sync from './sync.js';
+import walletScore from './wallet-score.js';
 import security from './security.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,14 @@ const MIME_TYPES = {
 function serveStatic(req, res) {
   let filePath = req.url === '/' ? '/index.html' : req.url;
 
+  // Clean routes (remove query params)
+  filePath = filePath.split('?')[0];
+
+  // Route /wallet to /wallet.html
+  if (filePath === '/wallet') {
+    filePath = '/wallet.html';
+  }
+
   // Security: prevent directory traversal
   filePath = path.normalize(filePath).replace(/^(\.\.[\/\\])+/, '');
 
@@ -65,6 +74,46 @@ function serveStatic(req, res) {
   } catch (error) {
     return false;
   }
+}
+
+/**
+ * Start daily snapshot scheduler
+ * Takes a snapshot every 24 hours, and immediately if none today
+ */
+async function startDailySnapshots() {
+  const SNAPSHOT_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+
+  // Check if we need a snapshot today
+  const snapshots = await db.getSnapshots(1);
+  const today = new Date().toISOString().split('T')[0];
+  const hasToday = snapshots.some(s => {
+    const ts = s.created_at;
+    const dateStr = typeof ts === 'string' ? ts : new Date(ts).toISOString();
+    return dateStr.startsWith(today);
+  });
+
+  if (!hasToday) {
+    log('INFO', 'Taking daily snapshot...');
+    try {
+      await calculator.calculateAndSave();
+      log('INFO', 'Daily snapshot saved');
+    } catch (error) {
+      log('ERROR', `Daily snapshot failed: ${error.message}`);
+    }
+  }
+
+  // Schedule next snapshots
+  setInterval(async () => {
+    log('INFO', 'Taking scheduled daily snapshot...');
+    try {
+      await calculator.calculateAndSave();
+      log('INFO', 'Daily snapshot saved');
+    } catch (error) {
+      log('ERROR', `Daily snapshot failed: ${error.message}`);
+    }
+  }, SNAPSHOT_INTERVAL);
+
+  log('INFO', 'Daily snapshots enabled (every 24h)');
 }
 
 async function main() {
@@ -140,12 +189,15 @@ async function main() {
     log('INFO', '═══════════════════════════════════════════');
     log('INFO', 'Frontend:');
     log('INFO', `  http://localhost:${PORT}/`);
+    log('INFO', `  http://localhost:${PORT}/wallet`);
     log('INFO', 'API:');
-    log('INFO', `  GET  /k-metric         → Current K-metric`);
-    log('INFO', `  GET  /k-metric/history → Historical snapshots`);
-    log('INFO', `  GET  /k-metric/holders → Holder list`);
-    log('INFO', `  POST /k-metric/webhook → Helius webhook (real-time)`);
-    log('INFO', `  POST /k-metric/sync    → Force sync`);
+    log('INFO', `  GET  /k-metric                       → K_token (this token)`);
+    log('INFO', `  GET  /k-metric/history               → Historical snapshots`);
+    log('INFO', `  GET  /k-metric/holders               → Holder list`);
+    log('INFO', `  GET  /k-metric/wallet/:addr/k-score  → K_wallet (this token)`);
+    log('INFO', `  GET  /k-metric/wallet/:addr/k-global → K_wallet (all PumpFun)`);
+    log('INFO', `  POST /k-metric/webhook               → Helius webhook`);
+    log('INFO', `  POST /k-metric/sync                  → Force sync`);
     log('INFO', '───────────────────────────────────────────');
     log('INFO', 'Sync: Webhook + Polling fallback (5min)');
     log('INFO', '═══════════════════════════════════════════');
@@ -153,8 +205,14 @@ async function main() {
     // Start polling fallback service
     sync.startPolling();
 
+    // Start K_wallet queue worker
+    walletScore.startWorker();
+
     // Start scheduled backups (every 6 hours)
     security.startScheduledBackups();
+
+    // Start daily snapshots (every 24 hours, also take one now if needed)
+    startDailySnapshots();
   });
 }
 

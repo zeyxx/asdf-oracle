@@ -134,6 +134,13 @@
       </button>
     </div>
 
+    <!-- Check Your K -->
+    <div class="actions-bar" style="margin-top: 1rem;">
+      <a href="/wallet" class="btn btn-primary" style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem;">
+        <span>🔍</span> Check Your K Score
+      </a>
+    </div>
+
     <!-- Footer Stats -->
     <div class="footer-stats">
       <div class="footer-stat">
@@ -145,8 +152,8 @@
         <div class="footer-stat-label">OG holders</div>
       </div>
       <div class="footer-stat">
-        <div class="footer-stat-value" id="token-price">--</div>
-        <div class="footer-stat-label">price</div>
+        <div class="footer-stat-value" id="token-mcap">--</div>
+        <div class="footer-stat-label">mcap</div>
       </div>
       <div class="footer-stat">
         <div class="footer-stat-value" id="last-update">--</div>
@@ -191,7 +198,7 @@
       historyCount: document.getElementById('history-count'),
       avgHold: document.getElementById('avg-hold'),
       ogPct: document.getElementById('og-pct'),
-      tokenPrice: document.getElementById('token-price'),
+      tokenMcap: document.getElementById('token-mcap'),
       lastUpdate: document.getElementById('last-update'),
       refreshBtn: document.getElementById('refresh-btn'),
       shareBtn: document.getElementById('share-btn'),
@@ -297,18 +304,18 @@
       // Footer stats
       elements.avgHold.textContent = data.avgHoldDays ?? '--';
       elements.ogPct.textContent = `${data.ogPct ?? 0}%`;
-      if (data.token?.price && data.token.price > 0) {
-        // Format price nicely
-        const price = data.token.price;
-        if (price < 0.0001) {
-          elements.tokenPrice.textContent = `$${price.toExponential(2)}`;
-        } else if (price < 1) {
-          elements.tokenPrice.textContent = `$${price.toFixed(6)}`;
+      if (data.token?.mcap && data.token.mcap > 0) {
+        // Format mcap nicely (e.g., $91K, $1.2M)
+        const mcap = data.token.mcap;
+        if (mcap >= 1e6) {
+          elements.tokenMcap.textContent = `$${(mcap / 1e6).toFixed(1)}M`;
+        } else if (mcap >= 1e3) {
+          elements.tokenMcap.textContent = `$${(mcap / 1e3).toFixed(0)}K`;
         } else {
-          elements.tokenPrice.textContent = `$${price.toFixed(4)}`;
+          elements.tokenMcap.textContent = `$${mcap.toFixed(0)}`;
         }
       } else {
-        elements.tokenPrice.textContent = '--';
+        elements.tokenMcap.textContent = '--';
       }
       elements.lastUpdate.textContent = new Date().toLocaleTimeString('en-US', {
         hour: '2-digit',

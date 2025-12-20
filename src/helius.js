@@ -235,10 +235,211 @@ export function parseTransaction(tx) {
   return changes;
 }
 
+/**
+ * Enhanced Transactions API - get parsed transaction history
+ * Much faster than manual RPC parsing
+ * @param {string} address - Wallet address
+ * @param {object} options - { type, limit, before }
+ */
+export async function getEnhancedTransactions(address, options = {}) {
+  const params = new URLSearchParams({
+    'api-key': HELIUS_API_KEY,
+  });
+
+  if (options.type) params.append('type', options.type);
+  if (options.limit) params.append('limit', options.limit.toString());
+  if (options.before) params.append('before', options.before);
+
+  const url = `https://api-mainnet.helius-rpc.com/v0/addresses/${address}/transactions?${params}`;
+
+  const response = await rateLimitedFetch(url, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Enhanced API error: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get token transfer history for a wallet
+ * Returns parsed transfers with token info
+ */
+export async function getTokenTransfers(address, options = {}) {
+  const limit = options.limit || 100;
+  let allTransfers = [];
+  let before = null;
+  let pages = 0;
+  const maxPages = options.maxPages || 3;
+
+  while (pages < maxPages) {
+    const txs = await getEnhancedTransactions(address, {
+      limit: Math.min(limit, 100),
+      before,
+    });
+
+    if (!txs || txs.length === 0) break;
+
+    // Extract token transfers from parsed transactions
+    for (const tx of txs) {
+      if (tx.tokenTransfers && tx.tokenTransfers.length > 0) {
+        for (const transfer of tx.tokenTransfers) {
+          allTransfers.push({
+            signature: tx.signature,
+            timestamp: tx.timestamp,
+            mint: transfer.mint,
+            fromUser: transfer.fromUserAccount,
+            toUser: transfer.toUserAccount,
+            amount: transfer.tokenAmount,
+          });
+        }
+      }
+    }
+
+    before = txs[txs.length - 1].signature;
+    pages++;
+
+    if (txs.length < 100) break; // No more pages
+  }
+
+  return allTransfers;
+}
+
+/**
+ * Get COMPLETE PumpFun trading history for a wallet
+ * Fetches ALL transactions, builds position map for each token
+ *
+ * @param {string} address - Wallet address
+ * @param {object} options - { maxPages: 50, onProgress: fn }
+ * @returns {object} { positions: Map<mint, Position>, stats }
+ */
+export async function getCompletePumpFunHistory(address, options = {}) {
+  const maxPages = options.maxPages || 50; // Up to 5000 transactions
+  const onProgress = options.onProgress || (() => {});
+
+  // Position map: mint -> { first_buy_ts, first_buy_amount, total_bought, total_sold, current, txs }
+  const positions = new Map();
+  let before = null;
+  let pages = 0;
+  let totalTxs = 0;
+  let pumpTxs = 0;
+
+  console.log(`[Helius] Fetching complete history for ${address.slice(0, 8)}...`);
+
+  while (pages < maxPages) {
+    const txs = await getEnhancedTransactions(address, {
+      limit: 100,
+      before,
+    });
+
+    if (!txs || txs.length === 0) break;
+    totalTxs += txs.length;
+
+    // Process each transaction
+    for (const tx of txs) {
+      if (!tx.tokenTransfers || tx.tokenTransfers.length === 0) continue;
+
+      for (const transfer of tx.tokenTransfers) {
+        const mint = transfer.mint;
+        if (!mint) continue;
+
+        // Check if PumpFun token
+        const lowerMint = mint.toLowerCase();
+        if (!lowerMint.endsWith('pump') && !lowerMint.endsWith('asdf')) continue;
+
+        pumpTxs++;
+        const amount = transfer.tokenAmount || 0;
+        const isReceive = transfer.toUserAccount === address;
+        const isSend = transfer.fromUserAccount === address;
+
+        // Get or create position
+        if (!positions.has(mint)) {
+          positions.set(mint, {
+            mint,
+            first_buy_ts: null,
+            first_buy_amount: 0,
+            total_bought: 0,
+            total_sold: 0,
+            current: 0,
+            last_tx_ts: null,
+            tx_count: 0,
+          });
+        }
+
+        const pos = positions.get(mint);
+        pos.tx_count++;
+        pos.last_tx_ts = tx.timestamp;
+
+        if (isReceive) {
+          pos.total_bought += amount;
+          pos.current += amount;
+          // Track first buy (we're going backwards in time, so update on each receive)
+          pos.first_buy_ts = tx.timestamp;
+          pos.first_buy_amount = amount; // Will be overwritten by earlier buys
+        }
+
+        if (isSend) {
+          pos.total_sold += amount;
+          pos.current -= amount;
+        }
+      }
+    }
+
+    before = txs[txs.length - 1].signature;
+    pages++;
+    onProgress({ pages, totalTxs, pumpTxs, positions: positions.size });
+
+    // Continue if we got any results (Helius can return < 100 even if more exist)
+    if (txs.length === 0) break;
+  }
+
+  // Fix first_buy_amount: since we went backwards, we need to find the actual first buy
+  // The last "first_buy" we saw is actually the earliest
+  // But current balance might be negative due to airdrops received before buys
+  // Normalize: if current < 0, set to 0
+  for (const [mint, pos] of positions) {
+    if (pos.current < 0) pos.current = 0;
+
+    // Calculate retention
+    if (pos.first_buy_amount > 0) {
+      pos.retention = pos.current / pos.first_buy_amount;
+    } else if (pos.total_bought > 0) {
+      pos.retention = pos.current / pos.total_bought;
+    } else {
+      pos.retention = 0;
+    }
+
+    // Classify
+    if (pos.retention >= 1.5) pos.classification = 'accumulator';
+    else if (pos.retention >= 1.0) pos.classification = 'holder';
+    else if (pos.retention >= 0.5) pos.classification = 'reducer';
+    else if (pos.current > 0) pos.classification = 'reducer';
+    else pos.classification = 'extractor';
+  }
+
+  console.log(`[Helius] Complete: ${pages} pages, ${totalTxs} txs, ${pumpTxs} pump transfers, ${positions.size} unique tokens`);
+
+  return {
+    positions,
+    stats: {
+      pages,
+      totalTxs,
+      pumpTxs,
+      uniqueTokens: positions.size,
+    }
+  };
+}
+
 export default {
   rpc,
   fetchHolders,
   streamMintTransactions,
   fetchTokenInfo,
   parseTransaction,
+  getEnhancedTransactions,
+  getTokenTransfers,
+  getCompletePumpFunHistory,
 };

@@ -8,6 +8,7 @@
 import db from './db.js';
 import helius from './helius.js';
 import calculator from './calculator.js';
+import walletScore from './wallet-score.js';
 import { log } from './utils.js';
 
 const POLL_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -79,6 +80,10 @@ async function fetchNewTransactions() {
 
           // Update wallet balance
           await updateWalletBalance(change);
+
+          // Queue K_wallet recalculation (high priority - tx triggered)
+          await walletScore.enqueueWallet(change.wallet);
+
           processed++;
         }
       } catch (e) {

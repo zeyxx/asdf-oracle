@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="$asdfasdfa Personal K Score - Your on-chain conviction proof">
+  <title>$asdfasdfa | My K Score</title>
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="$asdfasdfa - My K Score">
+  <meta property="og:description" content="Personal conviction metric. K is signal.">
+  <meta property="og:type" content="website">
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="css/style.css">
+
+  <!-- html2canvas for screenshot -->
+  <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+
+  <style>
+    /* Wallet-specific styles */
+    .wallet-input-panel {
+      background: rgba(26, 10, 2, 0.9);
+      border: 2px solid var(--fire-orange);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .wallet-input-row {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .wallet-input {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid var(--fire-orange);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      color: var(--text-primary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.875rem;
+    }
+
+    .wallet-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .wallet-input:focus {
+      outline: none;
+      border-color: var(--fire-yellow);
+      box-shadow: 0 0 10px rgba(251, 146, 60, 0.3);
+    }
+
+    .btn-check {
+      background: linear-gradient(135deg, var(--fire-orange), var(--fire-red));
+      border: none;
+      border-radius: 8px;
+      padding: 0.75rem 1.5rem;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-check:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 20px rgba(251, 146, 60, 0.5);
+    }
+
+    .btn-check:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* K Score Display */
+    .personal-k {
+      text-align: center;
+      padding: 2rem 0;
+    }
+
+    .retention-display {
+      font-size: 4rem;
+      font-weight: bold;
+      font-family: 'JetBrains Mono', monospace;
+      background: linear-gradient(135deg, var(--fire-yellow), var(--fire-orange));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.5rem;
+    }
+
+    .retention-display.accumulator {
+      background: linear-gradient(135deg, #4ade80, #22c55e);
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .retention-display.holder {
+      background: linear-gradient(135deg, var(--fire-yellow), #eab308);
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .retention-display.reducer {
+      background: linear-gradient(135deg, var(--fire-orange), #f97316);
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .retention-display.extractor {
+      background: linear-gradient(135deg, var(--fire-red), #dc2626);
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .classification-badge {
+      display: inline-block;
+      padding: 0.5rem 1.5rem;
+      border-radius: 50px;
+      font-size: 1.25rem;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+
+    .classification-badge.accumulator {
+      background: rgba(74, 222, 128, 0.2);
+      border: 2px solid #4ade80;
+      color: #4ade80;
+    }
+
+    .classification-badge.holder {
+      background: rgba(234, 179, 8, 0.2);
+      border: 2px solid #eab308;
+      color: #eab308;
+    }
+
+    .classification-badge.reducer {
+      background: rgba(249, 115, 22, 0.2);
+      border: 2px solid #f97316;
+      color: #f97316;
+    }
+
+    .classification-badge.extractor {
+      background: rgba(220, 38, 38, 0.2);
+      border: 2px solid #dc2626;
+      color: #dc2626;
+    }
+
+    .k-explanation {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      max-width: 400px;
+      margin: 0 auto;
+      line-height: 1.5;
+    }
+
+    /* Stats Grid */
+    .wallet-stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .wallet-stat {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(251, 146, 60, 0.3);
+      border-radius: 8px;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .wallet-stat-value {
+      font-size: 1.5rem;
+      font-weight: bold;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-primary);
+    }
+
+    .wallet-stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-top: 0.25rem;
+    }
+
+    /* OG Badge */
+    .og-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: linear-gradient(135deg, #a855f7, #7c3aed);
+      padding: 0.5rem 1rem;
+      border-radius: 50px;
+      font-size: 0.875rem;
+      font-weight: bold;
+      color: white;
+      margin-top: 1rem;
+    }
+
+    /* Never Sold Badge */
+    .diamond-hands-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: linear-gradient(135deg, #3b82f6, #06b6d4);
+      padding: 0.5rem 1rem;
+      border-radius: 50px;
+      font-size: 0.875rem;
+      font-weight: bold;
+      color: white;
+      margin-top: 0.5rem;
+    }
+
+    /* Not holder message */
+    .not-holder {
+      text-align: center;
+      padding: 3rem 1rem;
+    }
+
+    .not-holder-icon {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+    }
+
+    .not-holder-title {
+      font-size: 1.5rem;
+      color: var(--text-primary);
+      margin-bottom: 0.5rem;
+    }
+
+    .not-holder-msg {
+      color: var(--text-secondary);
+      margin-bottom: 1.5rem;
+    }
+
+    .btn-buy {
+      display: inline-block;
+      background: linear-gradient(135deg, var(--fire-orange), var(--fire-red));
+      color: white;
+      text-decoration: none;
+      padding: 1rem 2rem;
+      border-radius: 50px;
+      font-weight: bold;
+      transition: all 0.2s;
+    }
+
+    .btn-buy:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 30px rgba(251, 146, 60, 0.5);
+    }
+
+    /* Loading state */
+    .loading-state {
+      text-align: center;
+      padding: 3rem;
+    }
+
+    .loading-spinner {
+      font-size: 3rem;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    /* Compare section */
+    .compare-section {
+      margin-top: 1.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid rgba(251, 146, 60, 0.2);
+    }
+
+    .compare-title {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 1rem;
+      text-align: center;
+    }
+
+    .compare-bar {
+      height: 8px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .compare-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #dc2626, #f97316, #eab308, #4ade80);
+      border-radius: 4px;
+      transition: width 0.5s ease;
+    }
+
+    .compare-marker {
+      position: absolute;
+      top: -8px;
+      width: 2px;
+      height: 24px;
+      background: white;
+      transform: translateX(-50%);
+      transition: left 0.5s ease;
+    }
+
+    .compare-labels {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* K_wallet Global Section */
+    .k-wallet-section {
+      margin-top: 1.5rem;
+      padding: 1.5rem;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(251, 146, 60, 0.3);
+      border-radius: 12px;
+      text-align: center;
+    }
+
+    .section-title {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+
+    .k-wallet-display {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .k-wallet-value {
+      font-size: 2.5rem;
+      font-weight: bold;
+      font-family: 'JetBrains Mono', monospace;
+      background: linear-gradient(135deg, #06b6d4, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .k-wallet-value.loading {
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .k-wallet-tokens {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+    }
+
+    /* Back link */
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.875rem;
+      margin-bottom: 1rem;
+    }
+
+    .back-link:hover {
+      color: var(--fire-orange);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <span class="logo-fire">🔥</span>
+        <span class="logo-text">$asdfasdfa</span>
+      </div>
+      <div class="status-badge">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">ready</span>
+      </div>
+    </header>
+
+    <!-- Back Link -->
+    <a href="/" class="back-link">← Back to K Dashboard</a>
+
+    <!-- Wallet Input -->
+    <div class="wallet-input-panel">
+      <div class="wallet-input-row">
+        <input
+          type="text"
+          class="wallet-input"
+          id="wallet-input"
+          placeholder="Enter your Solana wallet address..."
+          autocomplete="off"
+          spellcheck="false"
+        >
+        <button class="btn-check" id="check-btn">Check K</button>
+      </div>
+    </div>
+
+    <!-- Main Panel -->
+    <main class="panel" id="main-panel">
+      <div class="panel-header">
+        <span class="panel-title">personal conviction</span>
+        <span class="panel-title" id="wallet-short">--</span>
+      </div>
+
+      <!-- Initial State -->
+      <div id="initial-state" class="not-holder">
+        <div class="not-holder-icon">🔍</div>
+        <div class="not-holder-title">Check Your K Score</div>
+        <div class="not-holder-msg">
+          Enter your wallet address above to see your personal conviction metric for $asdfasdfa
+        </div>
+      </div>
+
+      <!-- Loading State -->
+      <div id="loading-state" class="loading-state" style="display: none;">
+        <div class="loading-spinner">🔥</div>
+        <div style="color: var(--text-secondary); margin-top: 1rem;">fetching on-chain data...</div>
+      </div>
+
+      <!-- Not Holder State -->
+      <div id="not-holder-state" class="not-holder" style="display: none;">
+        <div class="not-holder-icon">🚫</div>
+        <div class="not-holder-title">Not a Holder</div>
+        <div class="not-holder-msg">
+          This wallet doesn't hold $asdfasdfa.<br>
+          Join the chaos to get your K score.
+        </div>
+        <a href="https://pump.fun/coin/6hEPeokGp3WS4JPvaxpmGpUakCCxPjFDzNq2tWh8pump" target="_blank" class="btn-buy">
+          🔥 Get $asdfasdfa
+        </a>
+      </div>
+
+      <!-- K Score Display -->
+      <div id="k-score-state" style="display: none;">
+        <div class="personal-k">
+          <div class="retention-display" id="retention-value">--</div>
+          <div class="classification-badge" id="classification-badge">--</div>
+          <div class="k-explanation" id="k-explanation">
+            Your personal conviction score based on retention of your original position.
+          </div>
+
+          <!-- Badges -->
+          <div id="badges-container"></div>
+        </div>
+
+        <!-- Stats -->
+        <div class="wallet-stats">
+          <div class="wallet-stat">
+            <div class="wallet-stat-value" id="hold-days">--</div>
+            <div class="wallet-stat-label">days holding</div>
+          </div>
+          <div class="wallet-stat">
+            <div class="wallet-stat-value" id="balance-pct">--</div>
+            <div class="wallet-stat-label">of first buy</div>
+          </div>
+          <div class="wallet-stat">
+            <div class="wallet-stat-value" id="first-buy-date">--</div>
+            <div class="wallet-stat-label">first buy</div>
+          </div>
+          <div class="wallet-stat">
+            <div class="wallet-stat-value green" id="k-token">--</div>
+            <div class="wallet-stat-label">token K</div>
+          </div>
+        </div>
+
+        <!-- K_wallet Global Section -->
+        <div class="k-wallet-section" id="k-wallet-section">
+          <div class="section-title">K_wallet global (all pump tokens)</div>
+          <div class="k-wallet-display">
+            <div class="k-wallet-value" id="k-wallet-value">--</div>
+            <div class="k-wallet-tokens" id="k-wallet-tokens">-- tokens analyzed</div>
+          </div>
+        </div>
+
+        <!-- Compare to Token K -->
+        <div class="compare-section">
+          <div class="compare-title">your position vs all holders</div>
+          <div class="compare-bar">
+            <div class="compare-fill" style="width: 100%;"></div>
+            <div class="compare-marker" id="compare-marker" style="left: 50%;"></div>
+          </div>
+          <div class="compare-labels">
+            <span>extractors</span>
+            <span>reducers</span>
+            <span>holders</span>
+            <span>accumulators</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Actions -->
+    <div class="actions-bar">
+      <button class="btn btn-twitter" id="share-btn" disabled>
+        <span>📸</span> Share My K
+      </button>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="footer-links">
+        Powered by <a href="https://helius.dev" target="_blank">Helius</a>
+        · <a href="/" >K Dashboard</a>
+      </div>
+      <div class="footer-motto">chaos is a filter 🔥</div>
+    </footer>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script type="module">
+    // ============================================
+    // Config
+    // ============================================
+    const API_BASE = '/k-metric';
+
+    // ============================================
+    // DOM Elements
+    // ============================================
+    const elements = {
+      statusDot: document.getElementById('status-dot'),
+      statusText: document.getElementById('status-text'),
+      walletInput: document.getElementById('wallet-input'),
+      checkBtn: document.getElementById('check-btn'),
+      shareBtn: document.getElementById('share-btn'),
+      walletShort: document.getElementById('wallet-short'),
+      initialState: document.getElementById('initial-state'),
+      loadingState: document.getElementById('loading-state'),
+      notHolderState: document.getElementById('not-holder-state'),
+      kScoreState: document.getElementById('k-score-state'),
+      retentionValue: document.getElementById('retention-value'),
+      classificationBadge: document.getElementById('classification-badge'),
+      kExplanation: document.getElementById('k-explanation'),
+      badgesContainer: document.getElementById('badges-container'),
+      holdDays: document.getElementById('hold-days'),
+      balancePct: document.getElementById('balance-pct'),
+      firstBuyDate: document.getElementById('first-buy-date'),
+      kToken: document.getElementById('k-token'),
+      compareMarker: document.getElementById('compare-marker'),
+      toast: document.getElementById('toast'),
+      kWalletSection: document.getElementById('k-wallet-section'),
+      kWalletValue: document.getElementById('k-wallet-value'),
+      kWalletTokens: document.getElementById('k-wallet-tokens'),
+    };
+
+    // ============================================
+    // State
+    // ============================================
+    let currentData = null;
+    let currentWallet = null;
+    let tokenK = null;
+
+    // ============================================
+    // Classifications
+    // ============================================
+    const classifications = {
+      accumulator: {
+        label: 'Accumulator',
+        emoji: '📈',
+        description: 'You\'ve increased your position beyond your first buy. True conviction.',
+        minRetention: 1.5,
+      },
+      holder: {
+        label: 'Holder',
+        emoji: '💎',
+        description: 'You\'ve maintained your original position. Steady hands.',
+        minRetention: 1.0,
+      },
+      reducer: {
+        label: 'Reducer',
+        emoji: '📉',
+        description: 'You\'ve reduced some of your position but still holding.',
+        minRetention: 0.5,
+      },
+      extractor: {
+        label: 'Extractor',
+        emoji: '🏃',
+        description: 'You\'ve extracted most of your position.',
+        minRetention: 0,
+      },
+    };
+
+    // ============================================
+    // API Functions
+    // ============================================
+    async function fetchWalletKScore(address) {
+      const res = await fetch(`${API_BASE}/wallet/${address}/k-score`);
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return await res.json();
+    }
+
+    async function fetchWalletKGlobal(address) {
+      const res = await fetch(`${API_BASE}/wallet/${address}/k-global`);
+      const data = await res.json();
+      return { status: res.status, ...data };
+    }
+
+    async function fetchTokenK() {
+      const res = await fetch(API_BASE);
+      if (!res.ok) return null;
+      return await res.json();
+    }
+
+    // ============================================
+    // UI Functions
+    // ============================================
+    function showState(state) {
+      elements.initialState.style.display = state === 'initial' ? 'block' : 'none';
+      elements.loadingState.style.display = state === 'loading' ? 'block' : 'none';
+      elements.notHolderState.style.display = state === 'not-holder' ? 'block' : 'none';
+      elements.kScoreState.style.display = state === 'k-score' ? 'block' : 'none';
+    }
+
+    function updateStatus(status, text) {
+      elements.statusDot.className = 'status-dot';
+      if (status === 'offline') elements.statusDot.classList.add('offline');
+      if (status === 'warning') elements.statusDot.classList.add('warning');
+      elements.statusText.textContent = text;
+    }
+
+    function showToast(message, isError = false) {
+      elements.toast.textContent = message;
+      elements.toast.className = 'toast' + (isError ? ' error' : '');
+      elements.toast.classList.add('show');
+      setTimeout(() => elements.toast.classList.remove('show'), 3000);
+    }
+
+    function formatDate(timestamp) {
+      if (!timestamp) return '--';
+      const date = new Date(timestamp);
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function updateDisplay(data, wallet) {
+      currentData = data;
+      currentWallet = wallet;
+
+      // Wallet short display
+      elements.walletShort.textContent = wallet.slice(0, 4) + '...' + wallet.slice(-4);
+
+      // Retention value
+      const retention = data.retention ?? 1;
+      const retentionPct = Math.round(retention * 100);
+      elements.retentionValue.textContent = `${retentionPct}%`;
+
+      // Classification
+      const classification = data.classification || 'holder';
+      const classInfo = classifications[classification] || classifications.holder;
+
+      elements.retentionValue.className = 'retention-display ' + classification;
+      elements.classificationBadge.textContent = `${classInfo.emoji} ${classInfo.label}`;
+      elements.classificationBadge.className = 'classification-badge ' + classification;
+      elements.kExplanation.textContent = classInfo.description;
+
+      // Stats
+      elements.holdDays.textContent = data.holdDays ?? '--';
+      elements.balancePct.textContent = `${retentionPct}%`;
+      elements.firstBuyDate.textContent = formatDate(data.first_seen_at);
+      elements.kToken.textContent = tokenK ? `${tokenK.k}%` : '--';
+
+      // Badges
+      elements.badgesContainer.innerHTML = '';
+
+      if (data.isOG) {
+        const ogBadge = document.createElement('div');
+        ogBadge.className = 'og-badge';
+        ogBadge.innerHTML = '👑 OG Holder';
+        elements.badgesContainer.appendChild(ogBadge);
+      }
+
+      if (data.neverSold) {
+        const diamondBadge = document.createElement('div');
+        diamondBadge.className = 'diamond-hands-badge';
+        diamondBadge.innerHTML = '💎 Diamond Hands';
+        elements.badgesContainer.appendChild(diamondBadge);
+      }
+
+      // Compare marker position (0% = extractor, 100% = accumulator)
+      let markerPosition;
+      if (retention >= 1.5) {
+        markerPosition = 87.5 + Math.min((retention - 1.5) * 10, 12.5);
+      } else if (retention >= 1.0) {
+        markerPosition = 62.5 + ((retention - 1.0) / 0.5) * 25;
+      } else if (retention >= 0.5) {
+        markerPosition = 37.5 + ((retention - 0.5) / 0.5) * 25;
+      } else {
+        markerPosition = (retention / 0.5) * 37.5;
+      }
+      elements.compareMarker.style.left = `${markerPosition}%`;
+
+      // Enable share button
+      elements.shareBtn.disabled = false;
+
+      showState('k-score');
+      updateStatus('online', 'verified');
+    }
+
+    // ============================================
+    // Check Wallet
+    // ============================================
+    async function checkWallet(address) {
+      if (!address || address.length < 32) {
+        showToast('Please enter a valid Solana wallet address', true);
+        return;
+      }
+
+      elements.checkBtn.disabled = true;
+      showState('loading');
+      updateStatus('warning', 'checking...');
+
+      try {
+        // Fetch wallet K_score and token K in parallel
+        const [walletData, tokenData] = await Promise.all([
+          fetchWalletKScore(address),
+          fetchTokenK(),
+        ]);
+
+        tokenK = tokenData;
+
+        if (walletData.error) {
+          if (walletData.error.includes('Not a holder')) {
+            showState('not-holder');
+            updateStatus('offline', 'not holder');
+          } else {
+            throw new Error(walletData.error);
+          }
+          return;
+        }
+
+        updateDisplay(walletData, address);
+
+        // Fetch K_wallet global (async, don't block)
+        fetchAndDisplayKWalletGlobal(address);
+
+        // Update URL without reload
+        const url = new URL(window.location);
+        url.searchParams.set('wallet', address);
+        window.history.pushState({}, '', url);
+
+      } catch (error) {
+        console.error('Check error:', error);
+        showToast(error.message || 'Failed to fetch data', true);
+        showState('initial');
+        updateStatus('offline', 'error');
+      } finally {
+        elements.checkBtn.disabled = false;
+      }
+    }
+
+    // Fetch and display K_wallet global (with polling for queued state)
+    async function fetchAndDisplayKWalletGlobal(address) {
+      elements.kWalletValue.textContent = '...';
+      elements.kWalletValue.classList.add('loading');
+      elements.kWalletTokens.textContent = 'calculating...';
+
+      let attempts = 0;
+      const maxAttempts = 30; // 5 minutes max (10s intervals)
+
+      while (attempts < maxAttempts) {
+        try {
+          const data = await fetchWalletKGlobal(address);
+
+          if (data.status === 200) {
+            // Got result
+            elements.kWalletValue.classList.remove('loading');
+            elements.kWalletValue.textContent = `${data.k_wallet}%`;
+            elements.kWalletTokens.textContent = `${data.tokens_analyzed} tokens analyzed`;
+            return;
+          }
+
+          if (data.status === 202) {
+            // Queued or calculating - wait and retry
+            attempts++;
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            continue;
+          }
+
+          if (data.status === 403) {
+            // Gated - not enough tokens
+            elements.kWalletValue.classList.remove('loading');
+            elements.kWalletValue.textContent = '🔒';
+            elements.kWalletTokens.textContent = 'hold $asdfasdfa to unlock';
+            return;
+          }
+
+          // Other error
+          throw new Error(data.error || 'Unknown error');
+
+        } catch (error) {
+          console.error('K_wallet global error:', error);
+          elements.kWalletValue.classList.remove('loading');
+          elements.kWalletValue.textContent = '--';
+          elements.kWalletTokens.textContent = 'error loading';
+          return;
+        }
+      }
+
+      // Timeout
+      elements.kWalletValue.classList.remove('loading');
+      elements.kWalletValue.textContent = '⏳';
+      elements.kWalletTokens.textContent = 'still calculating...';
+    }
+
+    // ============================================
+    // Share
+    // ============================================
+    async function shareOnTwitter() {
+      if (!currentData || !currentWallet) {
+        showToast('No data to share', true);
+        return;
+      }
+
+      showToast('Generating screenshot... 📸');
+      elements.shareBtn.disabled = true;
+
+      try {
+        const appElement = document.querySelector('.app');
+        const actionsBar = document.querySelector('.actions-bar');
+        const footer = document.querySelector('.footer');
+
+        actionsBar.style.display = 'none';
+        footer.style.display = 'none';
+
+        const canvas = await html2canvas(appElement, {
+          backgroundColor: '#1a0a02',
+          scale: 2,
+          logging: false,
+          useCORS: true,
+        });
+
+        actionsBar.style.display = '';
+        footer.style.display = '';
+
+        canvas.toBlob(async (blob) => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          const retPct = Math.round((currentData.retention ?? 1) * 100);
+          a.download = `asdfasdfa-my-k-${retPct}pct.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          showToast('Screenshot saved! Now share on Twitter 🔥');
+
+          const classInfo = classifications[currentData.classification] || classifications.holder;
+          const text = `My $asdfasdfa K Score: ${retPct}%
+
+${classInfo.emoji} ${classInfo.label}
+📅 Holding for ${currentData.holdDays || 0} days
+${currentData.neverSold ? '💎 Diamond Hands\n' : ''}${currentData.isOG ? '👑 OG Holder\n' : ''}
+price is noise, K is signal
+chaos is a filter 🔥
+
+#asdfasdfa #Solana`;
+
+          setTimeout(() => {
+            const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+            window.open(twitterUrl, '_blank');
+          }, 500);
+
+        }, 'image/png');
+
+      } catch (error) {
+        console.error('Screenshot error:', error);
+        showToast('Screenshot failed', true);
+      } finally {
+        elements.shareBtn.disabled = false;
+      }
+    }
+
+    // ============================================
+    // Init
+    // ============================================
+    function init() {
+      console.log('[App] Initializing Wallet K Score...');
+
+      // Event listeners
+      elements.checkBtn.addEventListener('click', () => {
+        checkWallet(elements.walletInput.value.trim());
+      });
+
+      elements.walletInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          checkWallet(elements.walletInput.value.trim());
+        }
+      });
+
+      elements.shareBtn.addEventListener('click', shareOnTwitter);
+
+      // Check URL params
+      const urlParams = new URLSearchParams(window.location.search);
+      const walletParam = urlParams.get('wallet');
+
+      if (walletParam) {
+        elements.walletInput.value = walletParam;
+        checkWallet(walletParam);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
