@@ -14,14 +14,27 @@ import security from './security.js';
 
 const WEBHOOK_SECRET = process.env.HELIUS_WEBHOOK_SECRET;
 const TOKEN_MINT = process.env.TOKEN_MINT;
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 /**
- * Verify Helius webhook signature
+ * Verify Helius webhook signature (HMAC-SHA256)
+ * Security: In production, HELIUS_WEBHOOK_SECRET is REQUIRED
  */
 export function verifySignature(payload, signature) {
+  // Production: Require webhook secret
   if (!WEBHOOK_SECRET) {
-    log('WARN', 'No webhook secret configured, skipping verification');
+    if (IS_PRODUCTION) {
+      log('ERROR', 'CRITICAL: No webhook secret in production - rejecting webhook');
+      return false;
+    }
+    log('WARN', 'No webhook secret configured (dev mode) - skipping verification');
     return true;
+  }
+
+  // Require signature header
+  if (!signature || typeof signature !== 'string') {
+    log('WARN', 'Missing or invalid X-Helius-Signature header');
+    return false;
   }
 
   const expectedSignature = crypto
@@ -29,10 +42,16 @@ export function verifySignature(payload, signature) {
     .update(payload)
     .digest('hex');
 
-  return crypto.timingSafeEqual(
-    Buffer.from(signature || ''),
-    Buffer.from(expectedSignature)
-  );
+  // Timing-safe comparison to prevent timing attacks
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(signature, 'utf8'),
+      Buffer.from(expectedSignature, 'utf8')
+    );
+  } catch {
+    // Buffer lengths don't match
+    return false;
+  }
 }
 
 /**

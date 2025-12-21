@@ -21,6 +21,13 @@
   <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
 
   <style>
+    /* Fire color variables (override/extend base) */
+    :root {
+      --fire-orange: #fb923c;
+      --fire-red: #ef4444;
+      --fire-yellow: #fbbf24;
+    }
+
     /* Wallet-specific styles */
     .wallet-input-panel {
       background: rgba(26, 10, 2, 0.9);
@@ -385,6 +392,196 @@
     .back-link:hover {
       color: var(--fire-orange);
     }
+
+    /* Tooltips - this is fine style */
+    .tooltip {
+      position: relative;
+      cursor: help;
+    }
+
+    .tooltip::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, #1a0a02 0%, #2d1810 100%);
+      border: 1px solid var(--fire-orange);
+      color: var(--text-primary);
+      padding: 0.5rem 0.75rem;
+      border-radius: 8px;
+      font-size: 0.75rem;
+      font-weight: normal;
+      text-transform: none;
+      letter-spacing: normal;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.2s ease;
+      z-index: 100;
+      box-shadow: 0 4px 20px rgba(251, 146, 60, 0.3);
+    }
+
+    .tooltip::before {
+      content: '';
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 6px solid transparent;
+      border-top-color: var(--fire-orange);
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.2s ease;
+      z-index: 101;
+    }
+
+    .tooltip:hover::after,
+    .tooltip:hover::before {
+      opacity: 1;
+      bottom: calc(100% + 8px);
+    }
+
+    .tooltip:hover::before {
+      bottom: calc(100% + 2px);
+    }
+
+    /* Info icon for tooltips */
+    .info-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: rgba(251, 146, 60, 0.3);
+      color: var(--fire-orange);
+      font-size: 0.6rem;
+      font-weight: bold;
+      margin-left: 0.25rem;
+      vertical-align: middle;
+    }
+
+    /* HODL DNA Section (ex K_wallet) */
+    .hodl-dna-section {
+      margin-top: 1.5rem;
+      padding: 1.5rem;
+      background: linear-gradient(135deg, rgba(251, 146, 60, 0.1) 0%, rgba(239, 68, 68, 0.1) 100%);
+      border: 2px solid var(--fire-orange);
+      border-radius: 12px;
+      text-align: center;
+      position: relative;
+    }
+
+    .hodl-dna-title {
+      font-size: 0.875rem;
+      color: var(--fire-orange);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      margin-bottom: 0.75rem;
+      font-weight: bold;
+    }
+
+    .hodl-dna-value {
+      font-size: 3rem;
+      font-weight: bold;
+      font-family: 'JetBrains Mono', monospace;
+      background: linear-gradient(135deg, var(--fire-yellow), var(--fire-orange), var(--fire-red));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: fire-glow 2s ease-in-out infinite;
+    }
+
+    @keyframes fire-glow {
+      0%, 100% { filter: drop-shadow(0 0 10px rgba(251, 146, 60, 0.5)); }
+      50% { filter: drop-shadow(0 0 20px rgba(251, 146, 60, 0.8)); }
+    }
+
+    .hodl-dna-value.loading {
+      animation: pulse 1.5s ease-in-out infinite, fire-glow 2s ease-in-out infinite;
+    }
+
+    .hodl-dna-subtitle {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-top: 0.5rem;
+    }
+
+    .hodl-dna-badge {
+      display: inline-block;
+      margin-top: 0.75rem;
+      padding: 0.25rem 0.75rem;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 20px;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    /* ========================================
+       RESPONSIVE - Only for small screens
+       ======================================== */
+
+    /* Mobile ONLY (< 480px) */
+    @media (max-width: 480px) {
+      .wallet-input-panel {
+        padding: 1rem;
+      }
+
+      .wallet-input-row {
+        flex-direction: column;
+      }
+
+      .wallet-input {
+        font-size: 16px; /* Prevent iOS zoom */
+      }
+
+      .btn-check {
+        width: 100%;
+      }
+
+      .retention-display {
+        font-size: 2.5rem;
+      }
+
+      .classification-badge {
+        font-size: 0.9rem;
+        padding: 0.4rem 1rem;
+      }
+
+      .k-explanation {
+        font-size: 0.8rem;
+      }
+
+      .wallet-stats {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+      }
+
+      .wallet-stat-value {
+        font-size: 1.1rem;
+      }
+
+      .wallet-stat-label {
+        font-size: 0.65rem;
+      }
+
+      .hodl-dna-section {
+        padding: 1rem;
+      }
+
+      .hodl-dna-value {
+        font-size: 2rem;
+      }
+
+      .compare-labels {
+        font-size: 0.6rem;
+      }
+
+      .og-badge, .diamond-hands-badge {
+        font-size: 0.75rem;
+      }
+    }
   </style>
 </head>
 <body>
@@ -422,7 +619,7 @@
     <!-- Main Panel -->
     <main class="panel" id="main-panel">
       <div class="panel-header">
-        <span class="panel-title">personal conviction</span>
+        <span class="panel-title tooltip" data-tip="Your on-chain proof of conviction">🔥 conviction score</span>
         <span class="panel-title" id="wallet-short">--</span>
       </div>
 
@@ -469,36 +666,37 @@
 
         <!-- Stats -->
         <div class="wallet-stats">
-          <div class="wallet-stat">
+          <div class="wallet-stat tooltip" data-tip="🔥 Time in the fire">
             <div class="wallet-stat-value" id="hold-days">--</div>
             <div class="wallet-stat-label">days holding</div>
           </div>
-          <div class="wallet-stat">
+          <div class="wallet-stat tooltip" data-tip="📊 Current vs first buy amount">
             <div class="wallet-stat-value" id="balance-pct">--</div>
-            <div class="wallet-stat-label">of first buy</div>
+            <div class="wallet-stat-label">retention</div>
           </div>
-          <div class="wallet-stat">
+          <div class="wallet-stat tooltip" data-tip="🕐 When you joined the chaos">
             <div class="wallet-stat-value" id="first-buy-date">--</div>
             <div class="wallet-stat-label">first buy</div>
           </div>
-          <div class="wallet-stat">
+          <div class="wallet-stat tooltip" data-tip="🐕 Global conviction of all holders">
             <div class="wallet-stat-value green" id="k-token">--</div>
             <div class="wallet-stat-label">token K</div>
           </div>
         </div>
 
-        <!-- K_wallet Global Section -->
-        <div class="k-wallet-section" id="k-wallet-section">
-          <div class="section-title">K_wallet global (all pump tokens)</div>
-          <div class="k-wallet-display">
-            <div class="k-wallet-value" id="k-wallet-value">--</div>
-            <div class="k-wallet-tokens" id="k-wallet-tokens">-- tokens analyzed</div>
+        <!-- HODL DNA Section (ex K_wallet) -->
+        <div class="hodl-dna-section" id="k-wallet-section">
+          <div class="hodl-dna-title tooltip" data-tip="Your conviction across ALL PumpFun tokens ever traded">
+            🧬 HODL DNA <span class="info-icon">?</span>
           </div>
+          <div class="hodl-dna-value" id="k-wallet-value">--</div>
+          <div class="hodl-dna-subtitle" id="k-wallet-tokens">analyzing your history...</div>
+          <div class="hodl-dna-badge" id="k-wallet-badge">this is fine 🐕🔥</div>
         </div>
 
         <!-- Compare to Token K -->
         <div class="compare-section">
-          <div class="compare-title">your position vs all holders</div>
+          <div class="compare-title tooltip" data-tip="Where you stand in the fire">your position vs all holders</div>
           <div class="compare-bar">
             <div class="compare-fill" style="width: 100%;"></div>
             <div class="compare-marker" id="compare-marker" style="left: 50%;"></div>
@@ -581,26 +779,26 @@
     const classifications = {
       accumulator: {
         label: 'Accumulator',
-        emoji: '📈',
-        description: 'You\'ve increased your position beyond your first buy. True conviction.',
+        emoji: '🔥',
+        description: 'Buying the chaos. You see fire and add more fuel.',
         minRetention: 1.5,
       },
       holder: {
-        label: 'Holder',
+        label: 'Diamond Hands',
         emoji: '💎',
-        description: 'You\'ve maintained your original position. Steady hands.',
+        description: 'This is fine. The room is on fire but you\'re not leaving.',
         minRetention: 1.0,
       },
       reducer: {
         label: 'Reducer',
-        emoji: '📉',
-        description: 'You\'ve reduced some of your position but still holding.',
+        emoji: '🐕',
+        description: 'Took some off the table. Still in the room though.',
         minRetention: 0.5,
       },
       extractor: {
-        label: 'Extractor',
+        label: 'Paper Hands',
         emoji: '🏃',
-        description: 'You\'ve extracted most of your position.',
+        description: 'Ran from the fire. Chaos was not your filter.',
         minRetention: 0,
       },
     };
@@ -775,11 +973,22 @@
       }
     }
 
-    // Fetch and display K_wallet global (with polling for queued state)
+    // Get HODL DNA badge message based on K value
+    function getHodlDnaBadge(kValue, tokens) {
+      if (kValue >= 80) return '💎 diamond hands DNA';
+      if (kValue >= 60) return '🔥 strong conviction';
+      if (kValue >= 40) return '🐕 this is fine';
+      if (kValue >= 20) return '📉 paper hands detected';
+      return '🏃 serial extractor';
+    }
+
+    // Fetch and display HODL DNA (with polling for queued state)
     async function fetchAndDisplayKWalletGlobal(address) {
+      const badge = document.getElementById('k-wallet-badge');
       elements.kWalletValue.textContent = '...';
       elements.kWalletValue.classList.add('loading');
-      elements.kWalletTokens.textContent = 'calculating...';
+      elements.kWalletTokens.textContent = 'scanning blockchain...';
+      badge.textContent = '🔥 analyzing...';
 
       let attempts = 0;
       const maxAttempts = 30; // 5 minutes max (10s intervals)
@@ -792,13 +1001,15 @@
             // Got result
             elements.kWalletValue.classList.remove('loading');
             elements.kWalletValue.textContent = `${data.k_wallet}%`;
-            elements.kWalletTokens.textContent = `${data.tokens_analyzed} tokens analyzed`;
+            elements.kWalletTokens.textContent = `${data.tokens_analyzed} tokens in your history`;
+            badge.textContent = getHodlDnaBadge(data.k_wallet, data.tokens_analyzed);
             return;
           }
 
           if (data.status === 202) {
             // Queued or calculating - wait and retry
             attempts++;
+            elements.kWalletTokens.textContent = `scanning... (${attempts * 10}s)`;
             await new Promise(resolve => setTimeout(resolve, 10000));
             continue;
           }
@@ -807,7 +1018,8 @@
             // Gated - not enough tokens
             elements.kWalletValue.classList.remove('loading');
             elements.kWalletValue.textContent = '🔒';
-            elements.kWalletTokens.textContent = 'hold $asdfasdfa to unlock';
+            elements.kWalletTokens.textContent = 'need more $asdfasdfa';
+            badge.textContent = 'hold to unlock 🐕';
             return;
           }
 
@@ -815,10 +1027,11 @@
           throw new Error(data.error || 'Unknown error');
 
         } catch (error) {
-          console.error('K_wallet global error:', error);
+          console.error('HODL DNA error:', error);
           elements.kWalletValue.classList.remove('loading');
           elements.kWalletValue.textContent = '--';
           elements.kWalletTokens.textContent = 'error loading';
+          badge.textContent = 'try again 🔥';
           return;
         }
       }
@@ -826,7 +1039,8 @@
       // Timeout
       elements.kWalletValue.classList.remove('loading');
       elements.kWalletValue.textContent = '⏳';
-      elements.kWalletTokens.textContent = 'still calculating...';
+      elements.kWalletTokens.textContent = 'still scanning...';
+      badge.textContent = 'deep history 📜';
     }
 
     // ============================================

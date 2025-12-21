@@ -86,12 +86,21 @@ async function handleGetHistory(req, res) {
 
 /**
  * GET /k-metric/holders - Get holder list with stats
+ * Includes pool detection for DEX liquidity pools
+ * MIN_BALANCE is dynamic: $1 worth of tokens at current price
  */
 async function handleGetHolders(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    const minBalance = parseInt(url.searchParams.get('min') || process.env.MIN_BALANCE || '1000');
     const limit = parseInt(url.searchParams.get('limit') || '100');
+    const excludePools = url.searchParams.get('exclude_pools') === 'true';
+    const minUsd = parseFloat(url.searchParams.get('min_usd') || '1'); // Default $1
+
+    // Dynamic MIN_BALANCE based on current price
+    const tokenInfo = await helius.fetchTokenInfo();
+    const price = tokenInfo.price || 0.0000001; // Fallback to avoid division by zero
+    // tokens = $1 / price, then multiply by 1e6 for raw units (6 decimals)
+    const minBalance = Math.floor((minUsd / price) * 1e6);
 
     const wallets = await db.getWallets(minBalance);
 
@@ -100,46 +109,75 @@ async function handleGetHolders(req, res) {
     const OG_EARLY_WINDOW = parseInt(process.env.OG_EARLY_WINDOW || '21') * 86400;
     const OG_HOLD_THRESHOLD = parseInt(process.env.OG_HOLD_THRESHOLD || '55') * 86400;
 
-    // Sort by balance and limit (BigInt comparison)
-    const sorted = wallets
-      .sort((a, b) => (b.current_balance > a.current_balance ? 1 : b.current_balance < a.current_balance ? -1 : 0))
-      .slice(0, limit)
-      .map((w) => {
-        const holdDays = w.first_buy_ts ? Math.floor((now - w.first_buy_ts) / 86400) : 0;
-        const isEarlyBuyer = w.first_buy_ts && w.first_buy_ts <= TOKEN_LAUNCH_TS + OG_EARLY_WINDOW;
-        const hasHeldLongEnough = w.first_buy_ts && (now - w.first_buy_ts) >= OG_HOLD_THRESHOLD;
-        const retention = w.first_buy_amount > 0n
-          ? Math.round(Number(w.current_balance) / Number(w.first_buy_amount) * 1000) / 1000
-          : 1.0;
+    // Sort by balance (BigInt comparison)
+    const sortedWallets = wallets
+      .sort((a, b) => (b.current_balance > a.current_balance ? 1 : b.current_balance < a.current_balance ? -1 : 0));
 
-        // Same classification as K_token
-        const classification = retention >= 1.5 ? 'accumulator'
-          : retention >= 1.0 ? 'holder'
-          : retention >= 0.5 ? 'reducer'
-          : 'extractor';
+    // Take top N for pool detection (limit + buffer for potential pools)
+    const topAddresses = sortedWallets.slice(0, Math.min(limit + 20, sortedWallets.length)).map(w => w.address);
 
-        return {
-          address: w.address,
-          balance: w.current_balance.toString(),
-          firstBuyAmount: w.first_buy_amount.toString(),
-          retention,
-          classification,
-          neverSold: w.total_sent === 0n,
-          holdDays,
-          isOG: Boolean(isEarlyBuyer && hasHeldLongEnough),
-          // K_wallet global (from DB, null if not yet calculated)
-          k_wallet: w.k_wallet,
-          k_wallet_tokens: w.k_wallet_tokens,
-          k_wallet_slot: w.k_wallet_slot,
-        };
-      });
+    // Batch check for pools
+    const poolResults = await helius.batchCheckPools(topAddresses);
+
+    // Map and filter
+    let sorted = sortedWallets.map((w) => {
+      const holdDays = w.first_buy_ts ? Math.floor((now - w.first_buy_ts) / 86400) : 0;
+      const isEarlyBuyer = w.first_buy_ts && w.first_buy_ts <= TOKEN_LAUNCH_TS + OG_EARLY_WINDOW;
+      const hasHeldLongEnough = w.first_buy_ts && (now - w.first_buy_ts) >= OG_HOLD_THRESHOLD;
+      const retention = w.first_buy_amount > 0n
+        ? Math.round(Number(w.current_balance) / Number(w.first_buy_amount) * 1000) / 1000
+        : 1.0;
+
+      // Same classification as K_token
+      const classification = retention >= 1.5 ? 'accumulator'
+        : retention >= 1.0 ? 'holder'
+        : retention >= 0.5 ? 'reducer'
+        : 'extractor';
+
+      // Pool detection
+      const poolInfo = poolResults.get(w.address);
+      const isPool = poolInfo?.isPool || false;
+
+      return {
+        address: w.address,
+        balance: w.current_balance.toString(),
+        firstBuyAmount: w.first_buy_amount.toString(),
+        retention,
+        classification,
+        neverSold: w.total_sent === 0n,
+        holdDays,
+        isOG: Boolean(isEarlyBuyer && hasHeldLongEnough),
+        isPool,
+        poolProgram: poolInfo?.program || null,
+        // K_wallet global (from DB, null if not yet calculated)
+        k_wallet: w.k_wallet,
+        k_wallet_tokens: w.k_wallet_tokens,
+        k_wallet_slot: w.k_wallet_slot,
+      };
+    });
+
+    // Optionally exclude pools
+    if (excludePools) {
+      sorted = sorted.filter(h => !h.isPool);
+    }
+
+    // Apply limit after potential filtering
+    sorted = sorted.slice(0, limit);
 
     // Count holders with K_wallet calculated
     const withKWallet = sorted.filter(h => h.k_wallet !== null).length;
+    const poolCount = sorted.filter(h => h.isPool).length;
 
     sendJson(res, 200, {
       holders: sorted,
       total: wallets.length,
+      pools_detected: poolCount,
+      filter: {
+        min_usd: minUsd,
+        price: price,
+        min_balance_raw: minBalance,
+        min_balance_tokens: minBalance / 1e6,
+      },
       k_wallet_coverage: {
         calculated: withKWallet,
         pending: sorted.length - withKWallet,

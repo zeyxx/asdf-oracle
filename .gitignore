@@ -5,26 +5,45 @@
 
 # Database (regenerated via backfill)
 data/*.db
+data/*.db-journal
 data/backups/
 
 # OS files
 .DS_Store
 Thumbs.db
+*~
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-*
+
+# Claude Code
+.claude/
+CLAUDE.md
 
 # Logs
 *.log
 npm-debug.log*
+yarn-error.log*
 
 # Dependencies
 node_modules/
+package-lock.json
 
-# Old files
+# Build artifacts
+dist/
+build/
+*.tgz
+
+# Temp files
+/tmp/
+*.tmp
+*.temp
+
+# Legacy files (pre-refactor)
 js/env.js
 k_analyzer.py
 k_tweet.html

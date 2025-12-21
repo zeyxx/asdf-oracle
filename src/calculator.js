@@ -6,7 +6,9 @@
  */
 
 import db from './db.js';
-import { pct, log } from './utils.js';
+import { pct, log, loadEnv } from './utils.js';
+
+loadEnv();
 
 const MIN_BALANCE = parseInt(process.env.MIN_BALANCE || '1000');
 const TOKEN_LAUNCH_TS = parseInt(process.env.TOKEN_LAUNCH_TS || '0');

@@ -12,6 +12,36 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 const TOKEN_MINT = process.env.TOKEN_MINT;
 
+// Known DEX/AMM program IDs - VERIFIED from official sources
+// Sources: Raydium docs, Orca GitHub, Meteora docs, Solscan, Bitquery
+const DEX_PROGRAMS = new Set([
+  // Raydium (verified: docs.raydium.io/raydium/protocol/developers/addresses)
+  '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium AMM v4
+  'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', // Raydium CLMM
+  '5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h', // Raydium Stable AMM
+  // Orca (verified: github.com/orca-so/whirlpools)
+  'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', // Orca Whirlpool
+  // Meteora (verified: solscan.io + docs.meteora.ag)
+  'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo', // Meteora DLMM
+  // OpenBook/Serum (verified: github.com/openbook-dex/resources)
+  'srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX', // OpenBook DEX (Serum fork)
+  '9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin', // Serum DEX v3 (legacy)
+  'opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb', // OpenBook v2
+  // PumpFun (verified: solscan.io + bitquery docs)
+  '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',  // PumpFun Program
+  '39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg', // PumpFun Migration
+  'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA', // PumpSwap AMM
+]);
+
+// Known pool/fee wallets (not programs, but still pools)
+const KNOWN_POOL_WALLETS = new Set([
+  'CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM', // PumpFun Fee Recipient
+]);
+
+// Cache for pool detection results (address -> {isPool, owner, checkedAt})
+const poolCache = new Map();
+const POOL_CACHE_TTL = 3600000; // 1 hour
+
 // Rate limiting
 const RATE_LIMIT = 50; // Requests per second (adjust based on Helius plan)
 const REQUEST_INTERVAL = 1000 / RATE_LIMIT;
@@ -346,9 +376,11 @@ export async function getCompletePumpFunHistory(address, options = {}) {
         const mint = transfer.mint;
         if (!mint) continue;
 
-        // Check if PumpFun token
+        // Check if PumpFun or dev.fun token
         const lowerMint = mint.toLowerCase();
-        if (!lowerMint.endsWith('pump') && !lowerMint.endsWith('asdf')) continue;
+        const isPumpToken = lowerMint.endsWith('pump') || lowerMint.endsWith('asdf');
+        const isDevToken = lowerMint.endsWith('dev');
+        if (!isPumpToken && !isDevToken) continue;
 
         pumpTxs++;
         const amount = transfer.tokenAmount || 0;
@@ -433,6 +465,106 @@ export async function getCompletePumpFunHistory(address, options = {}) {
   };
 }
 
+/**
+ * Check if an address is a DEX liquidity pool
+ * Checks account owner against known DEX program IDs
+ * @param {string} address - Wallet address to check
+ * @returns {Promise<{isPool: boolean, owner: string|null, program: string|null}>}
+ */
+export async function checkIfPool(address) {
+  // Check known pool wallets first (instant)
+  if (KNOWN_POOL_WALLETS.has(address)) {
+    return { isPool: true, owner: null, program: 'known_pool_wallet' };
+  }
+
+  // Check cache
+  const cached = poolCache.get(address);
+  if (cached && Date.now() - cached.checkedAt < POOL_CACHE_TTL) {
+    return { isPool: cached.isPool, owner: cached.owner, program: cached.program };
+  }
+
+  try {
+    // Get account info to check owner
+    const accountInfo = await rpc('getAccountInfo', [address, { encoding: 'base64' }]);
+
+    if (!accountInfo?.value) {
+      // Account doesn't exist or is a system account (wallet)
+      const result = { isPool: false, owner: null, program: null };
+      poolCache.set(address, { ...result, checkedAt: Date.now() });
+      return result;
+    }
+
+    const owner = accountInfo.value.owner;
+    const isPool = DEX_PROGRAMS.has(owner);
+    const program = isPool ? owner : null;
+
+    const result = { isPool, owner, program };
+    poolCache.set(address, { ...result, checkedAt: Date.now() });
+    return result;
+  } catch (error) {
+    console.error(`[Helius] Pool check error for ${address.slice(0, 8)}:`, error.message);
+    return { isPool: false, owner: null, program: null, error: error.message };
+  }
+}
+
+/**
+ * Batch check multiple addresses for pool status
+ * @param {string[]} addresses - Array of addresses to check
+ * @returns {Promise<Map<string, {isPool: boolean, owner: string|null}>>}
+ */
+export async function batchCheckPools(addresses) {
+  const results = new Map();
+
+  // Filter out cached results
+  const uncached = [];
+  for (const addr of addresses) {
+    if (KNOWN_POOL_WALLETS.has(addr)) {
+      results.set(addr, { isPool: true, owner: null, program: 'known_pool_wallet' });
+      continue;
+    }
+
+    const cached = poolCache.get(addr);
+    if (cached && Date.now() - cached.checkedAt < POOL_CACHE_TTL) {
+      results.set(addr, { isPool: cached.isPool, owner: cached.owner, program: cached.program });
+    } else {
+      uncached.push(addr);
+    }
+  }
+
+  // Batch RPC call for uncached addresses
+  if (uncached.length > 0) {
+    try {
+      const accountInfos = await rpc('getMultipleAccounts', [uncached, { encoding: 'base64' }]);
+
+      for (let i = 0; i < uncached.length; i++) {
+        const addr = uncached[i];
+        const info = accountInfos?.value?.[i];
+
+        if (!info) {
+          results.set(addr, { isPool: false, owner: null, program: null });
+          poolCache.set(addr, { isPool: false, owner: null, program: null, checkedAt: Date.now() });
+          continue;
+        }
+
+        const owner = info.owner;
+        const isPool = DEX_PROGRAMS.has(owner);
+        const program = isPool ? owner : null;
+
+        results.set(addr, { isPool, owner, program });
+        poolCache.set(addr, { isPool, owner, program, checkedAt: Date.now() });
+      }
+    } catch (error) {
+      console.error('[Helius] Batch pool check error:', error.message);
+      // Mark all as unknown
+      for (const addr of uncached) {
+        results.set(addr, { isPool: false, owner: null, program: null, error: error.message });
+      }
+    }
+  }
+
+  return results;
+}
+
 export default {
   rpc,
   fetchHolders,
@@ -442,4 +574,6 @@ export default {
   getEnhancedTransactions,
   getTokenTransfers,
   getCompletePumpFunHistory,
+  checkIfPool,
+  batchCheckPools,
 };

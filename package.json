@@ -1,0 +1,23 @@
+{
+  "name": "k-metric-dashboard",
+  "version": "1.0.0",
+  "description": "K-Metric on-chain holder conviction tracking dashboard",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "backfill": "node scripts/backfill.js"
+  },
+  "keywords": [
+    "solana",
+    "crypto",
+    "dashboard",
+    "k-metric",
+    "holder-analysis"
+  ],
+  "private": true,
+  "license": "MIT"
+}

@@ -27,6 +27,30 @@ loadEnv();
 
 const PORT = process.env.PORT || 3001;
 
+// CORS allowed origins (from env or defaults for dev)
+const ALLOWED_ORIGINS = (() => {
+  const envOrigins = process.env.CORS_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean);
+  if (envOrigins?.length) return new Set(envOrigins);
+  // Default: localhost + GitHub Codespaces pattern
+  return new Set([
+    'http://localhost:3001',
+    'http://127.0.0.1:3001',
+  ]);
+})();
+
+// Check if origin is allowed
+function isOriginAllowed(origin) {
+  if (!origin) return true; // Same-origin requests have no Origin header
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  // Allow GitHub Codespaces URLs
+  if (origin.match(/^https:\/\/.*\.app\.github\.dev$/)) return true;
+  // Allow Render URLs (*.onrender.com)
+  if (origin.match(/^https:\/\/.*\.onrender\.com$/)) return true;
+  // Allow alonisthe.dev
+  if (origin.match(/^https:\/\/(.*\.)?alonisthe\.dev$/)) return true;
+  return false;
+}
+
 // MIME types for static files
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -134,12 +158,20 @@ async function main() {
 
   // Create server
   const server = http.createServer(async (req, res) => {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Helius-Signature');
+    // CORS headers - restrict to allowed origins
+    const origin = req.headers.origin;
+    if (isOriginAllowed(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin || '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Helius-Signature');
+    }
 
     if (req.method === 'OPTIONS') {
+      if (!isOriginAllowed(origin)) {
+        res.writeHead(403);
+        res.end('CORS not allowed');
+        return;
+      }
       res.writeHead(204);
       res.end();
       return;

@@ -15,12 +15,80 @@
   <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 
   <!-- Styles -->
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=3">
+
+  <!-- Tooltip styles - this is fine mode -->
+  <style>
+    .tooltip {
+      position: relative;
+      cursor: help;
+    }
+    .tooltip::after {
+      content: attr(data-tip);
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, #1a0a02 0%, #2d1810 100%);
+      border: 1px solid var(--fire-orange, #fb923c);
+      color: #fbbf24;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.75rem;
+      font-family: 'Comic Neue', cursive;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(251, 146, 60, 0.3);
+    }
+    .tooltip:hover::after {
+      opacity: 1;
+    }
+    /* Panel headers: align left to avoid overflow */
+    .panel-header .tooltip::after {
+      left: 0;
+      transform: none;
+    }
+    /* Fix: .panel has overflow:hidden which clips tooltips */
+    .panel {
+      overflow: visible !important;
+    }
+    .stats-row,
+    .footer-stats,
+    .poh-status,
+    .history-panel {
+      overflow: visible;
+    }
+    /* Pool toggle */
+    .pool-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      margin-left: auto;
+      margin-right: 12px;
+    }
+    .pool-toggle input {
+      accent-color: var(--fire-orange, #fb923c);
+      cursor: pointer;
+    }
+    .pool-toggle-label {
+      font-size: 11px;
+      color: #888;
+      text-transform: lowercase;
+    }
+    .pool-toggle:hover .pool-toggle-label {
+      color: var(--fire-orange, #fb923c);
+    }
+  </style>
 
   <!-- html2canvas for screenshot -->
   <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
 </head>
 <body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
   <div class="app">
     <!-- Header -->
     <header class="header">
@@ -54,40 +122,63 @@
     </div>
 
     <!-- Main K-Metric Panel -->
-    <main class="panel">
+    <main id="main-content" class="panel">
       <div class="panel-header">
-        <span class="panel-title">holder conviction metric</span>
+        <span class="panel-title tooltip" data-tip="🐕 this is fine - we track who holds through chaos">holder conviction metric</span>
         <span class="panel-title">$asdfasdfa</span>
       </div>
 
-      <div class="k-display">
-        <div class="k-labels">
-          <div class="label-noise">price is noise</div>
-          <div class="label-signal">K is signal</div>
+      <!-- K Formula - Mathematical Beauty -->
+      <div class="k-formula tooltip" data-tip="φ Golden Ratio proportions · 552 sacred timing">
+        <span class="k-letter">K</span>
+        <span class="k-equals">=</span>
+        <div class="k-fraction">
+          <span class="k-numerator">
+            <span class="term maintained">maintained</span>
+            <span class="operator">+</span>
+            <span class="term accumulators">accumulators</span>
+          </span>
+          <span class="k-fraction-bar"></span>
+          <span class="k-denominator">total holders</span>
         </div>
-
-        <div class="k-metric">
-          <span class="k-letter">K</span>
-          <span class="k-equals">=</span>
-          <span class="k-value loading" id="k-value">--%</span>
-        </div>
-
-        <div class="k-definition">holders who maintained or increased position</div>
-        <div class="k-insight">behavioral constant · on-chain verified · updated live</div>
       </div>
 
-      <div class="stats-row">
-        <div class="stat">
+      <!-- K Display with Sacred Geometry -->
+      <div class="k-sacred">
+        <!-- Golden rings -->
+        <div class="sacred-ring outer"></div>
+        <div class="sacred-ring inner"></div>
+
+        <!-- K Value Center -->
+        <div class="k-center">
+          <div class="k-labels">
+            <span class="label-noise">price is noise</span>
+            <span class="label-signal">K is signal</span>
+          </div>
+          <div class="k-metric">
+            <span class="k-value loading" id="k-value">--%</span>
+          </div>
+          <div class="k-insight">φ · 552 · on-chain</div>
+        </div>
+      </div>
+
+      <!-- Stats Row - Golden Angle Layout -->
+      <div class="stats-row sacred">
+        <div class="stat tooltip" data-tip="🔥 wallets with >= $1 worth of tokens">
           <div class="stat-value" id="holders-count">--</div>
-          <div class="stat-label">holders tracked</div>
+          <div class="stat-label">holders</div>
         </div>
-        <div class="stat">
+        <div class="stat tooltip" data-tip="💎 diamond hands who never sold">
           <div class="stat-value gold" id="never-sold">--%</div>
-          <div class="stat-label">never sold</div>
+          <div class="stat-label">diamond</div>
         </div>
-        <div class="stat">
+        <div class="stat tooltip" data-tip="📈 chads who accumulated more">
           <div class="stat-value green" id="accumulated">--%</div>
-          <div class="stat-label">accumulated</div>
+          <div class="stat-label">acc</div>
+        </div>
+        <div class="stat tooltip" data-tip="🎖️ early believers from first 21 days">
+          <div class="stat-value orange" id="og-holders">--%</div>
+          <div class="stat-label">OG</div>
         </div>
       </div>
     </main>
@@ -95,7 +186,7 @@
     <!-- History Panel -->
     <section class="panel history-panel">
       <div class="history-header">
-        <span class="panel-title">K history</span>
+        <span class="panel-title tooltip" data-tip="📊 daily snapshots of K - watch the conviction evolve">K history</span>
         <span class="panel-title" id="history-count">0 snapshots</span>
       </div>
       <div class="history-body">
@@ -118,10 +209,53 @@
           <span id="chart-end">Today</span>
         </div>
       </div>
-      <div class="poh-status">
+      <div class="poh-status tooltip" data-tip="⛓️ Solana Proof of History - cryptographic timestamp for ordering">
         <span class="poh-label">PoH Slot:</span>
         <span class="poh-value" id="poh-slot">--</span>
       </div>
+    </section>
+
+    <!-- Top Holders Section -->
+    <section class="panel holders-panel">
+      <div class="panel-header">
+        <span class="panel-title tooltip" data-tip="🧬 conviction across ALL pump.fun + dev.fun tokens - the real DNA">🧬 top holders HODL DNA</span>
+        <label class="pool-toggle tooltip" data-tip="Hide DEX liquidity pools from list">
+          <input type="checkbox" id="hide-pools-toggle" checked>
+          <span class="pool-toggle-label">hide pools</span>
+        </label>
+        <span class="panel-title" id="holders-coverage">--</span>
+      </div>
+      <div class="holders-list" id="holders-list">
+        <div class="holders-loading">loading holders...</div>
+      </div>
+    </section>
+
+    <!-- Sync Status - This is Fine Mode 🐕🔥 -->
+    <section class="sync-status" id="sync-status">
+      <div class="sync-header">
+        <span class="sync-icon" id="sync-icon">🐕</span>
+        <span class="sync-title">sync status</span>
+        <span class="sync-mode" id="sync-mode">--</span>
+      </div>
+      <div class="sync-stats">
+        <div class="sync-stat tooltip" data-tip="Wallets tracked in local DB">
+          <span class="sync-stat-value" id="sync-wallets">--</span>
+          <span class="sync-stat-label">wallets</span>
+        </div>
+        <div class="sync-stat tooltip" data-tip="Total transactions processed">
+          <span class="sync-stat-value" id="sync-txs">--</span>
+          <span class="sync-stat-label">txs</span>
+        </div>
+        <div class="sync-stat tooltip" data-tip="PoH slot - cryptographic ordering">
+          <span class="sync-stat-value" id="sync-slot">--</span>
+          <span class="sync-stat-label">slot</span>
+        </div>
+        <div class="sync-stat tooltip" data-tip="K_wallet calculation queue">
+          <span class="sync-stat-value" id="sync-queue">--</span>
+          <span class="sync-stat-label">queue</span>
+        </div>
+      </div>
+      <div class="sync-message" id="sync-message">this is fine 🔥</div>
     </section>
 
     <!-- Actions -->
@@ -143,19 +277,19 @@
 
     <!-- Footer Stats -->
     <div class="footer-stats">
-      <div class="footer-stat">
+      <div class="footer-stat tooltip" data-tip="🔥 average time in the fire">
         <div class="footer-stat-value" id="avg-hold">--</div>
         <div class="footer-stat-label">avg hold days</div>
       </div>
-      <div class="footer-stat">
+      <div class="footer-stat tooltip" data-tip="👑 early + long-term holders - the OG crew">
         <div class="footer-stat-value" id="og-pct">--%</div>
         <div class="footer-stat-label">OG holders</div>
       </div>
-      <div class="footer-stat">
+      <div class="footer-stat tooltip" data-tip="💰 fully diluted valuation - just a number tbh">
         <div class="footer-stat-value" id="token-mcap">--</div>
         <div class="footer-stat-label">mcap</div>
       </div>
-      <div class="footer-stat">
+      <div class="footer-stat tooltip" data-tip="⏰ last data refresh from Helius RPC">
         <div class="footer-stat-value" id="last-update">--</div>
         <div class="footer-stat-label">last update</div>
       </div>
@@ -198,6 +332,7 @@
       historyCount: document.getElementById('history-count'),
       avgHold: document.getElementById('avg-hold'),
       ogPct: document.getElementById('og-pct'),
+      ogHolders: document.getElementById('og-holders'),
       tokenMcap: document.getElementById('token-mcap'),
       lastUpdate: document.getElementById('last-update'),
       refreshBtn: document.getElementById('refresh-btn'),
@@ -210,6 +345,7 @@
     // ============================================
     let currentData = null;
     let isRefreshing = false;
+    let cachedHoldersData = null;
 
     // ============================================
     // "This is Fine" Mode 🐕🔥
@@ -242,13 +378,15 @@
         clearInterval(thisIsFineInterval);
         thisIsFineInterval = null;
       }
-      document.querySelector('.k-definition').textContent = 'holders who maintained or increased position';
+      const insight = document.querySelector('.k-insight');
+      if (insight) insight.textContent = 'φ · 552 · on-chain';
     }
 
     function updateThisIsFineQuote() {
       const quote = thisIsFineQuotes[quoteIndex % thisIsFineQuotes.length];
       elements.kValue.textContent = quote.text;
-      document.querySelector('.k-definition').textContent = quote.sub;
+      const insight = document.querySelector('.k-insight');
+      if (insight) insight.textContent = quote.sub;
       quoteIndex++;
     }
 
@@ -270,6 +408,13 @@
     async function fetchStats() {
       const res = await fetch(`${API_BASE}/stats`);
       if (!res.ok) return null;
+      return await res.json();
+    }
+
+    async function fetchHolders() {
+      // Fetch extra to ensure 10 non-pools when filtering
+      const res = await fetch(`${API_BASE}/holders?limit=20`);
+      if (!res.ok) return { holders: [], k_wallet_coverage: {} };
       return await res.json();
     }
 
@@ -304,6 +449,11 @@
       // Footer stats
       elements.avgHold.textContent = data.avgHoldDays ?? '--';
       elements.ogPct.textContent = `${data.ogPct ?? 0}%`;
+
+      // Orbital OG stat
+      if (elements.ogHolders) {
+        elements.ogHolders.textContent = `${data.ogPct ?? 0}%`;
+      }
       if (data.token?.mcap && data.token.mcap > 0) {
         // Format mcap nicely (e.g., $91K, $1.2M)
         const mcap = data.token.mcap;
@@ -432,6 +582,199 @@
       }
     }
 
+    // This is fine messages for sync status
+    const syncMessages = [
+      'this is fine 🔥',
+      'everything is fine 🐕',
+      'totally normal 🔥',
+      'nothing to see here 🐕🔥',
+      'synced and cozy 🔥',
+      'blockchain is fine 🐕',
+      'all systems nominal 🔥',
+    ];
+
+    async function updateSyncStatus() {
+      try {
+        const res = await fetch(`${API_BASE}/status`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const syncSection = document.getElementById('sync-status');
+        const syncIcon = document.getElementById('sync-icon');
+        const syncMode = document.getElementById('sync-mode');
+        const syncWallets = document.getElementById('sync-wallets');
+        const syncTxs = document.getElementById('sync-txs');
+        const syncSlot = document.getElementById('sync-slot');
+        const syncQueue = document.getElementById('sync-queue');
+        const syncMessage = document.getElementById('sync-message');
+
+        // Update stats
+        if (data.sync) {
+          syncWallets.textContent = (data.sync.wallets || 0).toLocaleString();
+          syncTxs.textContent = formatCompact(data.sync.transactions || 0);
+          syncSlot.textContent = formatCompact(data.sync.lastProcessedSlot || 0);
+        }
+
+        // Queue status
+        if (data.queue) {
+          const queueSize = data.queue.queue_size || 0;
+          const active = data.queue.active_calculations || 0;
+          syncQueue.textContent = queueSize > 0 ? `${queueSize}+${active}` : '✓';
+        }
+
+        // Sync mode
+        const isWebhook = data.mode === 'hybrid';
+        syncMode.textContent = isWebhook ? '⚡ webhook' : '🔄 polling';
+        syncMode.className = 'sync-mode' + (isWebhook ? ' webhook' : '');
+
+        // Syncing state
+        const isSyncing = data.queue?.queue_size > 0 || data.queue?.active_calculations > 0;
+        syncSection.className = 'sync-status' + (isSyncing ? ' syncing' : '');
+        syncIcon.textContent = isSyncing ? '🐕‍🦺' : '🐕';
+
+        // Random message
+        const msg = syncMessages[Math.floor(Math.random() * syncMessages.length)];
+        syncMessage.textContent = isSyncing ? 'syncing... this is fine 🔥' : msg;
+
+      } catch (e) {
+        console.error('Failed to update sync status:', e);
+      }
+    }
+
+    function formatCompact(num) {
+      if (num >= 1e9) return (num / 1e9).toFixed(1) + 'B';
+      if (num >= 1e6) return (num / 1e6).toFixed(1) + 'M';
+      if (num >= 1e3) return (num / 1e3).toFixed(0) + 'K';
+      return num.toLocaleString();
+    }
+
+    // ============================================
+    // Holders List
+    // ============================================
+    function getHodlDnaClass(k) {
+      if (k === null) return 'pending';
+      if (k >= 80) return 'diamond';
+      if (k >= 50) return 'holder';
+      if (k >= 20) return 'reducer';
+      return 'extractor';
+    }
+
+    function getHodlDnaEmoji(k) {
+      if (k === null) return '⏳';
+      if (k >= 80) return '💎';
+      if (k >= 50) return '🔥';
+      if (k >= 20) return '🐕';
+      return '🏃';
+    }
+
+    function formatBalance(balance) {
+      const num = parseFloat(balance) / 1e6;
+      if (num >= 1e9) return (num / 1e9).toFixed(1) + 'B';
+      if (num >= 1e6) return (num / 1e6).toFixed(1) + 'M';
+      if (num >= 1e3) return (num / 1e3).toFixed(0) + 'K';
+      return num.toFixed(0);
+    }
+
+    async function renderHolders(forceRefresh = false) {
+      const holdersList = document.getElementById('holders-list');
+      const coverageEl = document.getElementById('holders-coverage');
+      const hidePoolsToggle = document.getElementById('hide-pools-toggle');
+      const hidePools = hidePoolsToggle?.checked ?? true;
+
+      try {
+        // Use cache if available and not forcing refresh
+        if (!forceRefresh && cachedHoldersData) {
+          // Just re-render with cached data
+        } else {
+          cachedHoldersData = await fetchHolders();
+        }
+
+        let { holders, k_wallet_coverage, pools_detected } = cachedHoldersData;
+
+        // Filter pools if toggle is checked, then limit to 10
+        if (hidePools && holders) {
+          holders = holders.filter(h => !h.isPool).slice(0, 10);
+        } else if (holders) {
+          holders = holders.slice(0, 10);
+        }
+
+        if (k_wallet_coverage) {
+          const pct = Math.round((k_wallet_coverage.calculated / (k_wallet_coverage.calculated + k_wallet_coverage.pending)) * 100) || 0;
+          coverageEl.textContent = pools_detected > 0 ? `${pct}% scanned (${pools_detected} pools)` : `${pct}% scanned`;
+        }
+
+        if (!holders || holders.length === 0) {
+          holdersList.innerHTML = '<div class="holders-loading">no holders found</div>';
+          return;
+        }
+
+        holdersList.innerHTML = holders.map((h, i) => {
+          const shortAddr = h.address.slice(0, 4) + '...' + h.address.slice(-4);
+
+          // Pool detection - show special badge instead of DNA
+          if (h.isPool) {
+            return `
+              <div class="holder-row pool-row">
+                <div class="holder-info">
+                  <span class="holder-rank">#${i + 1}</span>
+                  <a href="https://solscan.io/account/${h.address}" target="_blank" class="holder-address">${shortAddr}</a>
+                  <div class="holder-badges">
+                    <span class="holder-badge pool">🌊 POOL</span>
+                  </div>
+                </div>
+                <div class="holder-stats">
+                  <div class="holder-stat">
+                    <div class="holder-stat-value">${formatBalance(h.balance)}</div>
+                    <div class="holder-stat-label">liquidity</div>
+                  </div>
+                </div>
+                <div class="holder-dna">
+                  <div class="holder-dna-value pool">🌊 LP</div>
+                  <div class="holder-dna-label">DEX Pool</div>
+                </div>
+              </div>
+            `;
+          }
+
+          const dnaClass = getHodlDnaClass(h.k_wallet);
+          const dnaEmoji = getHodlDnaEmoji(h.k_wallet);
+          const dnaValue = h.k_wallet !== null ? `${h.k_wallet}%` : '...';
+
+          let badges = '';
+          if (h.isOG) badges += '<span class="holder-badge og">OG</span>';
+          if (h.neverSold) badges += '<span class="holder-badge diamond">💎</span>';
+
+          return `
+            <div class="holder-row">
+              <div class="holder-info">
+                <span class="holder-rank">#${i + 1}</span>
+                <a href="/wallet?wallet=${h.address}" class="holder-address">${shortAddr}</a>
+                <div class="holder-badges">${badges}</div>
+              </div>
+              <div class="holder-stats">
+                <div class="holder-stat">
+                  <div class="holder-stat-value">${formatBalance(h.balance)}</div>
+                  <div class="holder-stat-label">balance</div>
+                </div>
+                <div class="holder-stat">
+                  <div class="holder-stat-value">${h.holdDays}d</div>
+                  <div class="holder-stat-label">held</div>
+                </div>
+              </div>
+              <div class="holder-dna">
+                <div class="holder-dna-value ${dnaClass}">${dnaEmoji} ${dnaValue}</div>
+                <div class="holder-dna-label">HODL DNA</div>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+      } catch (e) {
+        console.error('Failed to load holders:', e);
+        holdersList.innerHTML = '<div class="holders-loading">error loading holders</div>';
+      }
+    }
+
     // ============================================
     // Actions
     // ============================================
@@ -453,6 +796,8 @@
         updateDisplay(data);
         await renderHistory();
         await updatePoHStatus();
+        await updateSyncStatus();
+        await renderHolders(true);
         showToast('K-Metric updated! 🔥');
       } catch (error) {
         console.error('Refresh error:', error);
@@ -583,6 +928,9 @@ chaos is a filter 🔥
 
       elements.refreshBtn.addEventListener('click', refresh);
       elements.shareBtn.addEventListener('click', shareOnTwitter);
+
+      // Pool toggle - re-render holders on change (use cache, don't refetch)
+      document.getElementById('hide-pools-toggle')?.addEventListener('change', () => renderHolders(false));
 
       // Auto-refresh on tab visible
       document.addEventListener('visibilitychange', () => {
