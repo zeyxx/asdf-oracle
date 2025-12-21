@@ -852,8 +852,10 @@
     }
 
     function formatDate(timestamp) {
-      if (!timestamp) return '--';
-      const date = new Date(timestamp);
+      if (!timestamp || timestamp < 1577836800) return '--'; // Before 2020 = invalid
+      // Convert Unix seconds to milliseconds
+      const ms = timestamp < 1e12 ? timestamp * 1000 : timestamp;
+      const date = new Date(ms);
       return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     }
 
