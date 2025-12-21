@@ -1,142 +1,128 @@
-# K-Metric Dashboard 🔥
+# asdf-oracle 🔥
 
-**this is fine** 🐕🔥 - On-chain holder conviction tracking for $asdfasdfa on Solana.
+**K-Metric Dashboard** — Holder conviction, measured on-chain.
 
-> Price is noise. K is signal.
+```
+K = (maintained + accumulators) / total holders
+```
+
+No narrative. Just math.
+
+---
 
 ## What is K?
 
-K-Metric measures the percentage of holders who maintained or increased their position. It's a behavioral constant that filters out paper hands.
+K measures who actually holds through chaos.
 
-```
-K = (maintained + accumulators) / total_holders × 100
-```
+| Classification | Retention | Meaning |
+|----------------|-----------|---------|
+| **Accumulator** | ≥ 1.5 | Bought more |
+| **Holder** | ≥ 1.0 | Never sold |
+| **Reducer** | ≥ 0.5 | Sold some |
+| **Extractor** | < 0.5 | Paper hands |
+
+**K = % of holders who maintained or accumulated.**
+
+A KOL claims diamond hands? Check their K_wallet.
+
+---
 
 ## Features
 
-- **Real-time tracking** via Helius webhooks
-- **Polling fallback** every 5 minutes (no single point of failure)
-- **PoH ordering** using Solana slots (no duplicates)
-- **SQLite storage** with automated backups
-- **Rate limiting** and input validation
-- **Fire theme** dashboard with "This is Fine" mode
+- **Real-time sync** — Helius webhooks + polling fallback
+- **PoH ordering** — Solana slot-based transaction ordering
+- **K_wallet** — Global conviction score across all PumpFun tokens
+- **Pool detection** — Hide Raydium/Orca/Meteora liquidity
+- **SQLite storage** — Native Node.js 22, no dependencies
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    K-METRIC SYSTEM                      │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  Data Sources (redundancy):                             │
-│  ├── Helius Webhook (real-time)                         │
-│  └── Polling fallback (5min)                            │
-│                                                         │
-│  Storage (backup):                                      │
-│  ├── SQLite primary                                     │
-│  └── Auto backups (6h) + manual                         │
-│                                                         │
-│  Security:                                              │
-│  ├── Rate limiting (100 req/min)                        │
-│  ├── HMAC-SHA256 webhook signature                      │
-│  ├── Input validation                                   │
-│  └── PoH slot ordering                                  │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-```
+---
 
 ## Quick Start
 
 ```bash
-# 1. Configure
+# Requirements: Node.js 22+
+node -v  # v22.x.x
+
+# Setup
 cp .env.example .env
-# Edit .env with your Helius API key
+# Add your HELIUS_API_KEY and TOKEN_MINT
 
-# 2. Initial sync (fetches all historical data)
-node scripts/backfill.js
-
-# 3. Start server
-node src/server.js
+# Run
+npm start
+# or
+./start.sh
 ```
 
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/k-metric` | GET | Current K-metric + token price |
-| `/k-metric/history` | GET | Historical snapshots |
-| `/k-metric/holders` | GET | Holder list with stats |
-| `/k-metric/status` | GET | Sync status |
-| `/k-metric/health` | GET | Health check |
-| `/k-metric/webhook` | POST | Helius webhook receiver |
-| `/k-metric/sync` | POST | Force manual sync |
-| `/k-metric/backup` | POST | Create manual backup |
-
-## Configuration
-
-```env
-# Required
-HELIUS_API_KEY=your-helius-api-key
-
-# Webhook security (generate with: openssl rand -hex 32)
-HELIUS_WEBHOOK_SECRET=your-webhook-secret
-
-# Token config
-TOKEN_MINT=9zB5wRarXMj86MymwLumSKA1Dx35zPqqKfcZtK1Spump
-TOKEN_SYMBOL=asdfasdfa
-MIN_BALANCE=1000
-
-# Server
-PORT=3001
-```
-
-## Helius Webhook Setup
-
-1. Go to https://dashboard.helius.dev/webhooks
-2. Create webhook:
-   - **Network**: mainnet
-   - **Type**: enhanced
-   - **URL**: `https://your-domain.com/k-metric/webhook`
-   - **Auth Header**: your HELIUS_WEBHOOK_SECRET
-   - **Account**: `9zB5wRarXMj86MymwLumSKA1Dx35zPqqKfcZtK1Spump`
-
-## File Structure
-
-```
-asdf-oracle/
-├── src/
-│   ├── server.js      # HTTP server + static files
-│   ├── router.js      # API routes
-│   ├── db.js          # SQLite wrapper (PoH slots)
-│   ├── helius.js      # Helius API client
-│   ├── calculator.js  # K-Metric calculation
-│   ├── webhook.js     # Real-time event handler
-│   ├── sync.js        # Polling fallback
-│   ├── security.js    # Rate limit, backup, validation
-│   └── utils.js       # Helpers
-├── scripts/
-│   └── backfill.js    # Initial data sync
-├── css/
-│   └── style.css      # Fire theme
-├── data/
-│   └── k-metric.db    # SQLite database (gitignored)
-├── index.html         # Dashboard frontend
-└── .env.example       # Config template
-```
-
-## Security
-
-- **No secrets in code** - all config via .env
-- **Webhook signature verification** - HMAC-SHA256
-- **Rate limiting** - 100 requests/minute per IP
-- **Input validation** - payload size limits
-- **Automated backups** - every 6 hours
-- **PoH ordering** - prevents duplicate processing
-
-## License
-
-MIT
+Dashboard: `http://localhost:3001`
 
 ---
 
-**chaos is a filter** 🔥
+## API
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /k-metric` | Current K + holder stats |
+| `GET /k-metric/holders` | All holders with classifications |
+| `GET /k-metric/wallet/:addr` | Single wallet data |
+| `GET /k-metric/wallet/:addr/k-global` | K_wallet (all PumpFun tokens) |
+| `GET /k-metric/status` | Sync status |
+| `POST /k-metric/webhook` | Helius webhook receiver |
+
+---
+
+## Environment
+
+```env
+HELIUS_API_KEY=your_key
+HELIUS_WEBHOOK_SECRET=your_secret  # Required in production
+TOKEN_MINT=your_token_mint
+NODE_ENV=production                # Enables security checks
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Helius    │────▶│   server    │────▶│   SQLite    │
+│  webhooks   │     │   + sync    │     │    (PoH)    │
+└─────────────┘     └─────────────┘     └─────────────┘
+                           │
+                           ▼
+                    ┌─────────────┐
+                    │  Dashboard  │
+                    │  (static)   │
+                    └─────────────┘
+```
+
+---
+
+## Security
+
+- **CORS** — Whitelist-based (localhost, Codespaces, Render, alonisthe.dev)
+- **Webhook** — HMAC signature verification required in production
+- **Rate limiting** — 100 req/min per IP
+- **Input validation** — Address format, payload size
+- **Backups** — Automatic every 6 hours
+
+---
+
+## Part of the Optimistic Burn Protocol
+
+This dashboard feeds into the $ASDFASDFA ecosystem:
+
+- **[asdf-validator](https://github.com/zeyxx/asdf-validator)** — Fee tracking
+- **[asdf-burn-engine](https://github.com/zeyxx/asdf-burn-engine)** — Automatic burns
+
+K-Metric proves conviction. Burns reward it.
+
+---
+
+## Contributing
+
+Prototype for [alonisthe.dev](https://alonisthe.dev) by [@gcrtrd](https://x.com/gcrtrd).
+
+---
+
+*price is noise · K is signal · 🔥 this is fine*
