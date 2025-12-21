@@ -211,7 +211,7 @@
       </div>
       <div class="poh-status tooltip" data-tip="⛓️ Solana Proof of History - cryptographic timestamp for ordering">
         <span class="poh-label">PoH Slot:</span>
-        <span class="poh-value" id="poh-slot">--</span>
+        <a class="poh-value poh-link" id="poh-slot" href="#" target="_blank" rel="noopener">--</a>
       </div>
     </section>
 
@@ -575,6 +575,7 @@
           const pohSlot = document.getElementById('poh-slot');
           if (pohSlot) {
             pohSlot.textContent = stats.lastProcessedSlot.toLocaleString();
+            pohSlot.href = `https://solscan.io/block/${stats.lastProcessedSlot}`;
           }
         }
       } catch (e) {

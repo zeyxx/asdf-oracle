@@ -631,6 +631,16 @@ body {
   font-weight: bold;
 }
 
+.poh-link {
+  text-decoration: none;
+  transition: color 0.2s, text-shadow 0.2s;
+}
+
+.poh-link:hover {
+  color: var(--orange-300);
+  text-shadow: 0 0 8px var(--orange-500);
+}
+
 /* ============================================
    Actions Bar
    ============================================ */
