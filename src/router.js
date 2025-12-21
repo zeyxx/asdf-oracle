@@ -29,6 +29,7 @@ const routes = {
   'GET /k-metric/holders': handleGetHolders,
   'GET /k-metric/stats': handleGetStats,
   'GET /k-metric/status': handleGetStatus,
+  'GET /k-metric/live': handleGetLiveFeed,
   'GET /k-metric/health': handleHealth,
   'POST /k-metric/webhook': handleWebhook,
   'POST /k-metric/sync': handleSync,
@@ -231,6 +232,34 @@ async function handleGetStatus(req, res) {
     });
   } catch (error) {
     log('ERROR', `Status error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /k-metric/live - Live transaction feed
+ */
+async function handleGetLiveFeed(req, res) {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '10'), 50);
+
+    const transactions = db.getRecentTransactions(limit);
+    const decimals = parseInt(process.env.TOKEN_DECIMALS || '6');
+
+    const formatted = transactions.map(tx => ({
+      signature: tx.signature,
+      slot: tx.slot,
+      wallet: tx.wallet,
+      amount: tx.amount_change ? (parseInt(tx.amount_change) / Math.pow(10, decimals)).toFixed(2) : '0',
+      type: tx.amount_change && parseInt(tx.amount_change) > 0 ? 'buy' : 'sell',
+      time: tx.block_time,
+      ago: tx.block_time ? Math.floor(Date.now() / 1000) - tx.block_time : null,
+    }));
+
+    sendJson(res, 200, { transactions: formatted });
+  } catch (error) {
+    log('ERROR', `Live feed error: ${error.message}`);
     sendJson(res, 500, { error: error.message });
   }
 }

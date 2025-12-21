@@ -544,6 +544,24 @@ export async function getWalletsNeedingKWallet(limit = 100, maxAgeSeconds = 8640
   return stmt.all(minBalance, cutoff, limit).map(r => r.address);
 }
 
+/**
+ * Get recent transactions for live feed
+ */
+export function getRecentTransactions(limit = 10) {
+  const db = getDbSync();
+  if (!db) return [];
+
+  const stmt = db.prepare(`
+    SELECT t.signature, t.slot, t.block_time, t.wallet, t.amount_change, t.processed_at,
+           w.current_balance
+    FROM transactions t
+    LEFT JOIN wallets w ON t.wallet = w.address
+    ORDER BY t.slot DESC
+    LIMIT ?
+  `);
+  return stmt.all(limit);
+}
+
 export default {
   getDb,
   upsertWallet,
@@ -569,4 +587,6 @@ export default {
   cleanupKWalletQueue,
   getKWalletQueueStats,
   getWalletsNeedingKWallet,
+  // Live feed
+  getRecentTransactions,
 };

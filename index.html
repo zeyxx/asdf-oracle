@@ -256,6 +256,13 @@
         </div>
       </div>
       <div class="sync-message" id="sync-message">this is fine 🔥</div>
+      <div class="live-feed" id="live-feed">
+        <div class="live-feed-header">
+          <span class="live-dot"></span>
+          <span>live txs</span>
+        </div>
+        <div class="live-feed-list" id="live-feed-list"></div>
+      </div>
     </section>
 
     <!-- Actions -->
@@ -650,6 +657,44 @@
     }
 
     // ============================================
+    // Live Transaction Feed
+    // ============================================
+    let lastTxSignature = null;
+
+    async function updateLiveFeed() {
+      try {
+        const response = await fetch(`${API_BASE}/live?limit=8`);
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const list = document.getElementById('live-feed-list');
+        if (!list || !data.transactions) return;
+
+        // Check if we have new transactions
+        if (data.transactions.length > 0 && data.transactions[0].signature !== lastTxSignature) {
+          lastTxSignature = data.transactions[0].signature;
+
+          list.innerHTML = data.transactions.map(tx => {
+            const wallet = tx.wallet ? `${tx.wallet.slice(0, 4)}...${tx.wallet.slice(-4)}` : '???';
+            const ago = tx.ago ? (tx.ago < 60 ? `${tx.ago}s` : `${Math.floor(tx.ago / 60)}m`) : '';
+            const amount = Math.abs(parseFloat(tx.amount)).toLocaleString();
+
+            return `
+              <div class="live-tx">
+                <span class="live-tx-type ${tx.type}">${tx.type === 'buy' ? '↗' : '↘'}</span>
+                <a class="live-tx-wallet" href="https://solscan.io/account/${tx.wallet}" target="_blank" rel="noopener">${wallet}</a>
+                <span class="live-tx-amount">${amount}</span>
+                <span class="live-tx-ago">${ago}</span>
+              </div>
+            `;
+          }).join('');
+        }
+      } catch (e) {
+        console.error('Failed to update live feed:', e);
+      }
+    }
+
+    // ============================================
     // Holders List
     // ============================================
     function getHodlDnaClass(k) {
@@ -939,6 +984,11 @@ chaos is a filter 🔥
       });
 
       startFireParticles();
+
+      // Live feed updates every 3 seconds
+      updateLiveFeed();
+      setInterval(updateLiveFeed, 3000);
+
       await refresh();
     }
 
