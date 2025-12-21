@@ -276,6 +276,14 @@ export async function startWorker() {
   workerRunning = true;
   log('INFO', '[WalletScore] Starting K_wallet queue worker');
 
+  // Clear existing queue on startup to ensure clean state relative to current PoH
+  try {
+    await db.clearKWalletQueue();
+    log('INFO', '[WalletScore] Cleared pending queue for fresh start');
+  } catch (e) {
+    log('ERROR', `[WalletScore] Failed to clear queue: ${e.message}`);
+  }
+
   // Auto-backfill: Queue all holders without K_wallet on startup
   setTimeout(async () => {
     try {
@@ -375,7 +383,8 @@ async function refreshStaleWallets() {
  * Called via admin endpoint
  */
 export async function backfillAllHolders() {
-  const wallets = await db.getWalletsNeedingKWallet(1000, 0); // All wallets with no K_wallet
+  // Use -1 to only get wallets that have NEVER been calculated (IS NULL)
+  const wallets = await db.getWalletsNeedingKWallet(1000, -1);
   if (wallets.length === 0) {
     return { queued: 0, message: 'All wallets already have K_wallet calculated' };
   }

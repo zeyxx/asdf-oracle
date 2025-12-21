@@ -185,6 +185,10 @@ export async function getDb() {
   return await initDb();
 }
 
+export function getDbSync() {
+  return db;
+}
+
 export async function upsertWallet(wallet) {
   const db = await getDb();
   const stmt = db.prepare(`
@@ -506,6 +510,16 @@ export async function cleanupKWalletQueue(maxAttempts = 5) {
 }
 
 /**
+ * Clear the entire K_wallet queue
+ * Used on startup to reset pending tasks
+ */
+export async function clearKWalletQueue() {
+  const db = await getDb();
+  const stmt = db.prepare('DELETE FROM k_wallet_queue');
+  stmt.run();
+}
+
+/**
  * Get queue stats
  */
 export async function getKWalletQueueStats() {
@@ -531,8 +545,20 @@ export async function getKWalletQueueStats() {
  */
 export async function getWalletsNeedingKWallet(limit = 100, maxAgeSeconds = 86400) {
   const db = await getDb();
-  const cutoff = Math.floor(Date.now() / 1000) - maxAgeSeconds;
   const minBalance = parseInt(process.env.MIN_BALANCE || '1000');
+
+  // If maxAgeSeconds is -1, we only want wallets with NULL k_wallet_updated_at (never calculated)
+  if (maxAgeSeconds === -1) {
+    const stmt = db.prepare(`
+      SELECT address FROM wallets
+      WHERE CAST(current_balance AS INTEGER) >= ?
+        AND k_wallet_updated_at IS NULL
+      LIMIT ?
+    `);
+    return stmt.all(minBalance, limit).map(r => r.address);
+  }
+
+  const cutoff = Math.floor(Date.now() / 1000) - maxAgeSeconds;
 
   const stmt = db.prepare(`
     SELECT address FROM wallets
@@ -585,8 +611,10 @@ export default {
   completeKWallet,
   failKWallet,
   cleanupKWalletQueue,
+  clearKWalletQueue,
   getKWalletQueueStats,
   getWalletsNeedingKWallet,
   // Live feed
   getRecentTransactions,
+  getDbSync,
 };
