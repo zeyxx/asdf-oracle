@@ -42,8 +42,12 @@ const KNOWN_POOL_WALLETS = new Set([
 const poolCache = new Map();
 const POOL_CACHE_TTL = 3600000; // 1 hour
 
-// Rate limiting
-const RATE_LIMIT = 50; // Requests per second (adjust based on Helius plan)
+// Cache for token info (price, supply, etc.) - avoids 3 external API calls per request
+let tokenInfoCache = { data: null, ts: 0 };
+const TOKEN_INFO_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Rate limiting - configurable via env (default 50, Helius Pro allows 100)
+const RATE_LIMIT = parseInt(process.env.HELIUS_RATE_LIMIT || '50');
 const REQUEST_INTERVAL = 1000 / RATE_LIMIT;
 let lastRequestTime = 0;
 
@@ -156,8 +160,16 @@ export async function streamMintTransactions(onBatch, afterSignature = null) {
 /**
  * Fetch token info (price, supply, etc.)
  * Uses DexScreener for on-chain price and CoinGecko for SOL/USD
+ * Cached for 5 minutes to avoid excessive external API calls
+ *
+ * @param {boolean} forceRefresh - Skip cache and fetch fresh data
  */
-export async function fetchTokenInfo() {
+export async function fetchTokenInfo(forceRefresh = false) {
+  // Return cached data if fresh
+  if (!forceRefresh && tokenInfoCache.data && Date.now() - tokenInfoCache.ts < TOKEN_INFO_TTL) {
+    return tokenInfoCache.data;
+  }
+
   try {
     // Get supply from chain
     const supply = await rpc('getTokenSupply', [TOKEN_MINT]);
@@ -197,7 +209,7 @@ export async function fetchTokenInfo() {
       priceUsd = priceNative * solPrice;
     }
 
-    return {
+    const data = {
       mint: TOKEN_MINT,
       symbol: process.env.TOKEN_SYMBOL || 'TOKEN',
       price: priceUsd,
@@ -208,8 +220,17 @@ export async function fetchTokenInfo() {
       fdv,
       mcap: fdv || (priceUsd * (totalSupply / 1e6)),
     };
+
+    // Cache the result
+    tokenInfoCache = { data, ts: Date.now() };
+    return data;
   } catch (error) {
     console.error('[Helius] Error fetching token info:', error.message);
+    // Return cached data on error if available
+    if (tokenInfoCache.data) {
+      console.log('[Helius] Returning stale cached token info');
+      return tokenInfoCache.data;
+    }
     return { mint: TOKEN_MINT, symbol: process.env.TOKEN_SYMBOL, price: 0, supply: 0, mcap: 0 };
   }
 }
