@@ -10,7 +10,14 @@ loadEnv();
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
+// Fallback RPC endpoint (optional - for high availability)
+const HELIUS_RPC_FALLBACK = process.env.HELIUS_RPC_FALLBACK || `https://api-mainnet.helius-rpc.com/v0?api-key=${HELIUS_API_KEY}`;
 const TOKEN_MINT = process.env.TOKEN_MINT;
+
+// Track endpoint health
+let primaryHealthy = true;
+let lastPrimaryCheck = 0;
+const HEALTH_CHECK_INTERVAL = 60000; // 1 minute
 
 // Known DEX/AMM program IDs - VERIFIED from official sources
 // Sources: Raydium docs, Orca GitHub, Meteora docs, Solscan, Bitquery
@@ -65,16 +72,59 @@ async function rateLimitedFetch(url, options) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function rpc(method, params) {
-  const response = await rateLimitedFetch(HELIUS_RPC, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
-  });
+/**
+ * Exponential backoff delay for retries
+ * @param {number} attempt - Current attempt number (0-based)
+ * @param {number} baseMs - Base delay in ms (default 1000)
+ * @param {number} maxMs - Max delay in ms (default 30000)
+ */
+function exponentialBackoff(attempt, baseMs = 1000, maxMs = 30000) {
+  const delayMs = Math.min(baseMs * Math.pow(2, attempt), maxMs);
+  // Add jitter (±20%) to prevent thundering herd
+  const jitter = delayMs * 0.2 * (Math.random() - 0.5);
+  return delay(delayMs + jitter);
+}
 
-  const data = await response.json();
-  if (data.error) throw new Error(data.error.message);
-  return data.result;
+/**
+ * RPC call with automatic fallback to secondary endpoint
+ */
+export async function rpc(method, params) {
+  const endpoints = primaryHealthy ? [HELIUS_RPC, HELIUS_RPC_FALLBACK] : [HELIUS_RPC_FALLBACK, HELIUS_RPC];
+
+  for (let i = 0; i < endpoints.length; i++) {
+    const endpoint = endpoints[i];
+    const isPrimary = endpoint === HELIUS_RPC;
+
+    try {
+      const response = await rateLimitedFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+      });
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+
+      // Mark primary as healthy if it succeeded
+      if (isPrimary) {
+        primaryHealthy = true;
+        lastPrimaryCheck = Date.now();
+      }
+
+      return data.result;
+    } catch (error) {
+      // Mark primary as unhealthy, try fallback
+      if (isPrimary) {
+        primaryHealthy = false;
+        console.warn(`[Helius] Primary endpoint failed, trying fallback: ${error.message}`);
+      }
+
+      // If this was the last endpoint, throw the error
+      if (i === endpoints.length - 1) {
+        throw error;
+      }
+    }
+  }
 }
 
 /**
@@ -119,6 +169,8 @@ export async function streamMintTransactions(onBatch, afterSignature = null) {
   let paginationToken = null;
   let totalProcessed = 0;
   let page = 0;
+  let retryCount = 0;
+  const MAX_RETRIES = 5;
 
   while (true) {
     page++;
@@ -139,6 +191,7 @@ export async function streamMintTransactions(onBatch, afterSignature = null) {
       // Process batch
       const processed = await onBatch(result.data);
       totalProcessed += result.data.length;
+      retryCount = 0; // Reset on success
 
       if (page % 100 === 0) {
         console.log(`[Helius] Processed ${totalProcessed} transactions...`);
@@ -148,8 +201,13 @@ export async function streamMintTransactions(onBatch, afterSignature = null) {
       if (!paginationToken) break;
     } catch (error) {
       console.error(`[Helius] Error fetching transactions: ${error.message}`);
-      // Wait and retry
-      await delay(5000);
+      retryCount++;
+      if (retryCount >= MAX_RETRIES) {
+        console.error(`[Helius] Max retries (${MAX_RETRIES}) reached, stopping`);
+        break;
+      }
+      // Exponential backoff with jitter
+      await exponentialBackoff(retryCount);
     }
   }
 

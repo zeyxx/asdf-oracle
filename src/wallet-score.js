@@ -17,9 +17,9 @@ import { log } from './utils.js';
 
 const TOKEN_MINT = process.env.TOKEN_MINT;
 
-// Cache for wallet scores (TTL: 1 hour)
+// Cache for wallet scores (TTL: 24 hours - K_wallet data is stable)
 const cache = new Map();
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 // Background queue
 const queue = new Map(); // address -> { status, started_at }
