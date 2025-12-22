@@ -18,6 +18,7 @@ import db from './db.js';
 import calculator from './calculator.js';
 import sync from './sync.js';
 import walletScore from './wallet-score.js';
+import tokenScore from './token-score.js';
 import security from './security.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -192,8 +193,8 @@ async function main() {
 
     const url = new URL(req.url, `http://${req.headers.host}`);
 
-    // API routes
-    if (url.pathname.startsWith('/k-metric')) {
+    // API routes (/k-metric for dashboard, /api/v1 for external services)
+    if (url.pathname.startsWith('/k-metric') || url.pathname.startsWith('/api/v1')) {
       log('INFO', `${req.method} ${req.url}`);
       try {
         await router.handleRequest(req, res);
@@ -217,19 +218,22 @@ async function main() {
 
   server.listen(PORT, () => {
     log('INFO', '═══════════════════════════════════════════');
-    log('INFO', `🔥 K-Metric server running on port ${PORT}`);
+    log('INFO', `🔥 K-Metric Oracle running on port ${PORT}`);
     log('INFO', '═══════════════════════════════════════════');
     log('INFO', 'Frontend:');
     log('INFO', `  http://localhost:${PORT}/`);
     log('INFO', `  http://localhost:${PORT}/wallet`);
-    log('INFO', 'API:');
+    log('INFO', 'Dashboard API (/k-metric):');
     log('INFO', `  GET  /k-metric                       → K_token (this token)`);
     log('INFO', `  GET  /k-metric/history               → Historical snapshots`);
     log('INFO', `  GET  /k-metric/holders               → Holder list`);
     log('INFO', `  GET  /k-metric/wallet/:addr/k-score  → K_wallet (this token)`);
     log('INFO', `  GET  /k-metric/wallet/:addr/k-global → K_wallet (all PumpFun)`);
     log('INFO', `  POST /k-metric/webhook               → Helius webhook`);
-    log('INFO', `  POST /k-metric/sync                  → Force sync`);
+    log('INFO', 'Oracle API v1 (/api/v1):');
+    log('INFO', `  GET  /api/v1/status                  → Oracle status`);
+    log('INFO', `  GET  /api/v1/token/:mint             → Token K score`);
+    log('INFO', `  GET  /api/v1/wallet/:addr            → Wallet K scores`);
     log('INFO', '───────────────────────────────────────────');
     log('INFO', 'Sync: Webhook + Polling fallback (5min)');
     log('INFO', '═══════════════════════════════════════════');
@@ -239,6 +243,9 @@ async function main() {
 
     // Start K_wallet queue worker
     walletScore.startWorker();
+
+    // Start Token K queue worker
+    tokenScore.startWorker();
 
     // Start scheduled backups (every 6 hours)
     security.startScheduledBackups();

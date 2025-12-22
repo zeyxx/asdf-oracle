@@ -18,6 +18,89 @@ let pollTimer = null;
 let isPolling = false;
 
 /**
+ * Sync holder delta: compare on-chain vs DB, add missing holders
+ * Filters by $1 USD minimum using real-time price
+ * Called at startup and periodically
+ */
+export async function syncHolderDelta() {
+  log('INFO', 'Syncing holder delta (on-chain vs DB)...');
+  const startTime = Date.now();
+
+  try {
+    // 1. Get current token price for $1 filter
+    const tokenInfo = await helius.fetchTokenInfo();
+    const price = tokenInfo.price || 0;
+
+    if (price <= 0) {
+      log('WARN', 'Could not get token price, using MIN_BALANCE fallback');
+      return { added: 0, error: 'no_price' };
+    }
+
+    // $1 in raw tokens (6 decimals)
+    const oneUsdInTokens = Math.floor((1 / price) * 1e6);
+    log('INFO', `$1 filter = ${(oneUsdInTokens / 1e6).toFixed(0)}M tokens (price: $${price.toFixed(6)})`);
+
+    // 2. Fetch on-chain holders
+    const onChainHolders = await helius.fetchHolders();
+    const qualifiedHolders = onChainHolders.filter(h => h.balance >= oneUsdInTokens);
+
+    log('INFO', `On-chain: ${onChainHolders.length} total, ${qualifiedHolders.length} >= $1`);
+
+    // 3. Get DB holders
+    const dbWallets = await db.getWallets(0);
+    const dbAddresses = new Set(dbWallets.map(w => w.address));
+
+    // 4. Find missing holders
+    const missing = qualifiedHolders.filter(h => !dbAddresses.has(h.address));
+
+    if (missing.length === 0) {
+      log('INFO', 'Holder delta: no missing holders');
+      return { added: 0, onChain: qualifiedHolders.length, db: dbWallets.length };
+    }
+
+    log('INFO', `Found ${missing.length} missing holders, adding to DB...`);
+
+    // 5. Add missing holders
+    for (const holder of missing) {
+      await db.upsertWallet({
+        address: holder.address,
+        balance: holder.balance,
+        firstBuyTs: null,
+        firstBuyAmount: holder.balance, // Assume current balance is first buy for now
+        received: holder.balance,
+        sent: 0,
+        lastTxSig: null,
+      });
+
+      // Queue K_wallet calculation
+      await walletScore.enqueueWallet(holder.address);
+    }
+
+    const elapsed = Date.now() - startTime;
+    log('INFO', `Holder delta complete: +${missing.length} holders (${elapsed}ms)`);
+
+    // 6. Store $1 threshold for calculator to use
+    await db.setSyncState('one_usd_threshold', oneUsdInTokens.toString());
+    await db.setSyncState('token_price', price.toString());
+
+    // 7. Recalculate K with updated holders
+    calculator.calculate();
+
+    return {
+      added: missing.length,
+      onChain: qualifiedHolders.length,
+      db: dbWallets.length + missing.length,
+      oneUsdThreshold: oneUsdInTokens,
+      elapsed,
+    };
+
+  } catch (error) {
+    log('ERROR', `Holder delta sync failed: ${error.message}`);
+    return { added: 0, error: error.message };
+  }
+}
+
+/**
  * Fetch new transactions since last processed slot
  */
 async function fetchNewTransactions() {
@@ -142,6 +225,7 @@ async function updateWalletBalance(change) {
 
 /**
  * Start polling service
+ * Runs holder delta sync immediately, then polls for new transactions
  */
 export function startPolling(intervalMs = POLL_INTERVAL) {
   if (pollTimer) {
@@ -151,14 +235,23 @@ export function startPolling(intervalMs = POLL_INTERVAL) {
 
   log('INFO', `Starting polling service (interval: ${intervalMs / 1000}s)`);
 
-  // Initial poll after 30 seconds
+  // Immediate: sync holder delta (find missing $1+ holders)
+  syncHolderDelta().catch(e => log('ERROR', `Initial delta sync failed: ${e.message}`));
+
+  // Initial transaction poll after 30 seconds
   setTimeout(() => {
     fetchNewTransactions();
   }, 30000);
 
-  // Regular polling
-  pollTimer = setInterval(() => {
-    fetchNewTransactions();
+  // Regular polling (transactions + delta every 5 polls)
+  let pollCount = 0;
+  pollTimer = setInterval(async () => {
+    await fetchNewTransactions();
+    pollCount++;
+    // Delta sync every 5 polls (25 minutes)
+    if (pollCount % 5 === 0) {
+      await syncHolderDelta();
+    }
   }, intervalMs);
 
   return pollTimer;
@@ -201,5 +294,6 @@ export default {
   startPolling,
   stopPolling,
   syncNow,
+  syncHolderDelta,
   getStatus,
 };

@@ -14,6 +14,7 @@ import helius from './helius.js';
 import webhook from './webhook.js';
 import sync from './sync.js';
 import walletScore from './wallet-score.js';
+import tokenScore from './token-score.js';
 import gating from './gating.js';
 import kolscan from './kolscan.js';
 import { loadEnv, log } from './utils.js';
@@ -21,6 +22,9 @@ import { loadEnv, log } from './utils.js';
 loadEnv();
 
 import security from './security.js';
+
+// API Key for service authentication (ASDev, etc.)
+const ORACLE_API_KEY = process.env.ORACLE_API_KEY || process.env.ADMIN_API_KEY;
 
 // Simple router implementation (no Express dependency)
 const routes = {
@@ -39,12 +43,18 @@ const routes = {
   'POST /k-metric/admin/batch-k': handleAdminBatchK,
   'POST /k-metric/admin/backfill-k-wallet': handleAdminBackfillKWallet,
   'GET /k-metric/admin/k-wallet-queue': handleAdminKWalletQueue,
+  // API v1 - Oracle endpoints for ASDev
+  'GET /api/v1/status': handleApiV1Status,
 };
 
 // Dynamic routes (with parameters)
 const dynamicRoutes = [
   { pattern: /^GET \/k-metric\/wallet\/([A-Za-z0-9]{32,44})\/k-score$/, handler: handleGetWalletKScore },
   { pattern: /^GET \/k-metric\/wallet\/([A-Za-z0-9]{32,44})\/k-global$/, handler: handleGetWalletKGlobal },
+  // API v1 - Token K score (any PumpFun/Ignition token)
+  { pattern: /^GET \/api\/v1\/token\/([A-Za-z0-9]{32,44})$/, handler: handleApiV1Token },
+  // API v1 - Wallet K score
+  { pattern: /^GET \/api\/v1\/wallet\/([A-Za-z0-9]{32,44})$/, handler: handleApiV1Wallet },
 ];
 
 /**
@@ -660,6 +670,141 @@ async function handleSync(req, res) {
   }
 }
 
+// ============================================
+// API v1 - Oracle Endpoints for ASDev
+// ============================================
+
+/**
+ * Verify Oracle API key
+ */
+function verifyOracleKey(req) {
+  const apiKey = req.headers['x-oracle-key'];
+  if (!ORACLE_API_KEY) return true; // No key configured = open access
+  return apiKey === ORACLE_API_KEY;
+}
+
+/**
+ * GET /api/v1/status - API status and queue info
+ */
+async function handleApiV1Status(req, res) {
+  try {
+    const tokenQueueStats = await tokenScore.getQueueStats();
+    const walletQueueStats = walletScore.getQueueStats();
+    const kMetric = await calculator.calculate();
+
+    sendJson(res, 200, {
+      version: 'v1',
+      status: 'operational',
+      primary_token: {
+        mint: process.env.TOKEN_MINT,
+        k: kMetric?.k || 0,
+        holders: kMetric?.holders || 0,
+      },
+      queues: {
+        token: tokenQueueStats,
+        wallet: walletQueueStats,
+      },
+    });
+  } catch (error) {
+    log('ERROR', `API v1 status error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /api/v1/token/:mint - Get K score for any token
+ * Authenticated via X-Oracle-Key header
+ */
+async function handleApiV1Token(req, res, params) {
+  try {
+    const mint = params[0];
+
+    // Validate token format
+    if (!security.validateAddress(mint)) {
+      return sendJson(res, 400, { error: 'Invalid token mint address' });
+    }
+
+    // Validate token type (PumpFun, Ignition, or dev.fun)
+    if (!tokenScore.isValidToken(mint)) {
+      return sendJson(res, 400, {
+        error: 'Invalid token type',
+        message: 'Only PumpFun (*pump), Ignition (*asdf), and dev.fun (*dev) tokens are supported',
+      });
+    }
+
+    // Get or calculate K
+    const result = await tokenScore.getTokenK(mint);
+
+    // If queued/syncing, return 202 Accepted
+    if (result.status === 'queued' || result.status === 'syncing') {
+      return sendJson(res, 202, result);
+    }
+
+    sendJson(res, 200, result);
+  } catch (error) {
+    log('ERROR', `API v1 token error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /api/v1/wallet/:address - Get wallet K scores
+ * Returns K_wallet (global) + K for primary token
+ */
+async function handleApiV1Wallet(req, res, params) {
+  try {
+    const address = params[0];
+
+    // Validate address
+    if (!security.validateAddress(address)) {
+      return sendJson(res, 400, { error: 'Invalid wallet address' });
+    }
+
+    // Get K for primary token ($ASDFASDFA)
+    const kToken = await db.getWalletKScore(address);
+
+    // Get K_wallet (global across all PumpFun)
+    const kWalletDB = await walletScore.getKWalletFromDB(address);
+    let kWalletResult = null;
+
+    if (kWalletDB) {
+      kWalletResult = {
+        k_wallet: kWalletDB.k_wallet,
+        tokens_analyzed: kWalletDB.tokens_analyzed,
+        updated_at: kWalletDB.updated_at,
+      };
+    } else {
+      // Queue for calculation
+      await walletScore.enqueueWallet(address);
+      kWalletResult = {
+        status: 'queued',
+        message: 'K_wallet calculation queued',
+      };
+    }
+
+    // Check if holder of primary token
+    const isHolder = kToken && BigInt(kToken.balance || '0') > 0n;
+
+    sendJson(res, 200, {
+      address,
+      is_holder: isHolder,
+      primary_token: kToken ? {
+        mint: process.env.TOKEN_MINT,
+        balance: kToken.balance,
+        first_buy_amount: kToken.first_buy_amount,
+        retention: kToken.retention,
+        classification: kToken.classification,
+        hold_days: kToken.hold_days,
+        is_og: kToken.is_og,
+      } : null,
+      k_wallet: kWalletResult,
+    });
+  } catch (error) {
+    log('ERROR', `API v1 wallet error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
 // Helper to send JSON response
 function sendJson(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -673,28 +818,36 @@ export async function handleRequest(req, res) {
   const method = req.method;
   const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
 
-  // Remove /api prefix if present
-  const path = pathname.replace(/^\/api/, '');
+  // For /k-metric routes, also try with /api prefix stripped (backwards compat)
+  // For /api/v1 routes, use the full path
+  const paths = [pathname];
+  if (pathname.startsWith('/api/') && !pathname.startsWith('/api/v1')) {
+    paths.push(pathname.replace(/^\/api/, ''));
+  }
 
-  const routeKey = `${method} ${path}`;
-  const handler = routes[routeKey];
+  // Try each path variant
+  for (const path of paths) {
+    const routeKey = `${method} ${path}`;
+    const handler = routes[routeKey];
 
-  if (handler) {
-    // Parse JSON body for POST requests
-    if (method === 'POST' && !req.body) {
-      let body = '';
-      for await (const chunk of req) {
-        body += chunk;
+    if (handler) {
+      // Parse JSON body for POST requests
+      if (method === 'POST' && !req.body) {
+        let body = '';
+        for await (const chunk of req) {
+          body += chunk;
+        }
+        try {
+          req.body = JSON.parse(body);
+        } catch {
+          req.body = {};
+        }
       }
-      try {
-        req.body = JSON.parse(body);
-      } catch {
-        req.body = {};
-      }
+
+      await handler(req, res);
+      return;
     }
 
-    await handler(req, res);
-  } else {
     // Try dynamic routes
     for (const route of dynamicRoutes) {
       const match = `${method} ${path}`.match(route.pattern);
@@ -704,9 +857,9 @@ export async function handleRequest(req, res) {
         return;
       }
     }
-
-    sendJson(res, 404, { error: 'Not found' });
   }
+
+  sendJson(res, 404, { error: 'Not found' });
 }
 
 /**
@@ -716,7 +869,7 @@ export function expressRouter() {
   return async (req, res, next) => {
     const path = req.path;
 
-    if (path.startsWith('/k-metric')) {
+    if (path.startsWith('/k-metric') || path.startsWith('/api/v1')) {
       await handleRequest(req, res);
     } else {
       next();

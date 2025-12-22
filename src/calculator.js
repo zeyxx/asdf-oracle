@@ -3,6 +3,8 @@
  *
  * Calculates holder conviction from local SQLite data.
  * No API calls - instant calculation.
+ *
+ * Uses $1 USD threshold (from sync) or MIN_BALANCE fallback.
  */
 
 import db from './db.js';
@@ -10,10 +12,23 @@ import { pct, log, loadEnv } from './utils.js';
 
 loadEnv();
 
-const MIN_BALANCE = parseInt(process.env.MIN_BALANCE || '1000');
+const MIN_BALANCE_FALLBACK = parseInt(process.env.MIN_BALANCE || '1000');
 const TOKEN_LAUNCH_TS = parseInt(process.env.TOKEN_LAUNCH_TS || '0');
 const OG_EARLY_WINDOW = parseInt(process.env.OG_EARLY_WINDOW || '21') * 86400; // days to seconds
 const OG_HOLD_THRESHOLD = parseInt(process.env.OG_HOLD_THRESHOLD || '55') * 86400; // days to seconds
+
+/**
+ * Get minimum balance threshold ($1 USD or fallback)
+ */
+async function getMinBalance() {
+  // Try to get $1 threshold from sync state
+  const threshold = await db.getSyncState('one_usd_threshold');
+  if (threshold) {
+    return parseInt(threshold);
+  }
+  // Fallback to env MIN_BALANCE
+  return MIN_BALANCE_FALLBACK;
+}
 
 /**
  * Calculate K-Metric from stored wallet data
@@ -23,8 +38,11 @@ export async function calculate() {
   log('INFO', 'Calculating K-Metric...');
   const startTime = Date.now();
 
+  // Get $1 threshold or fallback
+  const minBalance = await getMinBalance();
+
   // Get all wallets with minimum balance
-  const wallets = await db.getWallets(MIN_BALANCE);
+  const wallets = await db.getWallets(minBalance);
 
   if (wallets.length === 0) {
     log('WARN', 'No wallets found with minimum balance');

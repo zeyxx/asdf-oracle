@@ -339,7 +339,7 @@ export async function getTokenTransfers(address, options = {}) {
 }
 
 /**
- * Get COMPLETE PumpFun trading history for a wallet
+ * Get COMPLETE trading history for supported tokens (PumpFun, Ignition, dev.fun)
  * Fetches ALL transactions, builds position map for each token
  *
  * @param {string} address - Wallet address
@@ -376,11 +376,13 @@ export async function getCompletePumpFunHistory(address, options = {}) {
         const mint = transfer.mint;
         if (!mint) continue;
 
-        // Check if PumpFun or dev.fun token
+        // Check if supported token platform (PumpFun, Ignition, or dev.fun)
         const lowerMint = mint.toLowerCase();
-        const isPumpToken = lowerMint.endsWith('pump') || lowerMint.endsWith('asdf');
-        const isDevToken = lowerMint.endsWith('dev');
-        if (!isPumpToken && !isDevToken) continue;
+        const isSupportedPlatform =
+          lowerMint.endsWith('pump') ||  // PumpFun
+          lowerMint.endsWith('asdf') ||  // Ignition
+          lowerMint.endsWith('dev');     // dev.fun
+        if (!isSupportedPlatform) continue;
 
         pumpTxs++;
         const amount = transfer.tokenAmount || 0;
