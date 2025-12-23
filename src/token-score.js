@@ -22,7 +22,8 @@ import { log } from './utils.js';
 
 const TOKEN_MINT = process.env.TOKEN_MINT; // Primary token ($ASDFASDFA)
 const TOKEN_K_TTL = 3600; // 1 hour cache
-const MAX_HOLDERS_TO_ANALYZE = 500; // Limit for API cost control
+const MAX_HOLDERS_TO_ANALYZE = 50; // Sample top 50 holders for speed
+const PARALLEL_CONCURRENCY = 5; // Process 5 holders in parallel
 
 /**
  * Check if token is PumpFun or Ignition (dev.fun)
@@ -165,35 +166,40 @@ export async function calculateTokenK(mint) {
     log('INFO', `[TokenScore] Found ${holders.length} holders for ${mint.slice(0, 8)}`);
 
     // 2. For each holder, get their history and calculate retention
+    // Use parallel processing with concurrency limit for speed
     const holdersToAnalyze = holders.slice(0, MAX_HOLDERS_TO_ANALYZE);
     const analyzed = [];
 
-    for (let i = 0; i < holdersToAnalyze.length; i++) {
-      const holder = holdersToAnalyze[i];
+    // Process in batches of PARALLEL_CONCURRENCY
+    for (let i = 0; i < holdersToAnalyze.length; i += PARALLEL_CONCURRENCY) {
+      const batch = holdersToAnalyze.slice(i, i + PARALLEL_CONCURRENCY);
 
-      try {
-        const history = await getHolderTokenHistory(holder.address, mint);
+      const results = await Promise.allSettled(
+        batch.map(async (holder) => {
+          const history = await getHolderTokenHistory(holder.address, mint);
 
-        if (history.first_buy_amount > 0) {
-          const retention = history.current_balance / history.first_buy_amount;
-          const classification = classifyRetention(retention);
+          if (history.first_buy_amount > 0) {
+            const retention = history.current_balance / history.first_buy_amount;
+            return {
+              address: holder.address,
+              current_balance: history.current_balance,
+              first_buy_amount: history.first_buy_amount,
+              retention,
+              classification: classifyRetention(retention),
+            };
+          }
+          return null;
+        })
+      );
 
-          analyzed.push({
-            address: holder.address,
-            current_balance: history.current_balance,
-            first_buy_amount: history.first_buy_amount,
-            retention,
-            classification,
-          });
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          analyzed.push(result.value);
         }
-      } catch (error) {
-        log('WARN', `[TokenScore] Failed to get history for ${holder.address.slice(0, 8)}: ${error.message}`);
       }
 
-      // Progress log every 50 holders
-      if ((i + 1) % 50 === 0) {
-        log('INFO', `[TokenScore] Processed ${i + 1}/${holdersToAnalyze.length} holders`);
-      }
+      // Progress log every batch
+      log('INFO', `[TokenScore] Processed ${Math.min(i + PARALLEL_CONCURRENCY, holdersToAnalyze.length)}/${holdersToAnalyze.length} holders for ${mint.slice(0, 8)}`);
     }
 
     // 3. Calculate K

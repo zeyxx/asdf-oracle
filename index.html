@@ -91,6 +91,95 @@
   <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
 </head>
 <body>
+  <!-- Maintenance Mode Overlay -->
+  <div id="maintenance-overlay" style="display: none;">
+    <div class="maintenance-content">
+      <div class="maintenance-dog">🐕🔥</div>
+      <h1>this is fine</h1>
+      <p class="maintenance-subtitle">Oracle is recharging its Helius credits</p>
+      <div class="maintenance-k">K = <span id="maintenance-k">--</span>%</div>
+      <p class="maintenance-message">Dashboard data may be stale. API calls limited.</p>
+      <div class="maintenance-links">
+        <a href="https://github.com/sollama58/asdf-oracle" target="_blank">GitHub</a>
+        <span>•</span>
+        <a href="https://x.com/aslonasdfa" target="_blank">Twitter</a>
+      </div>
+    </div>
+  </div>
+  <style>
+    #maintenance-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: linear-gradient(135deg, #1a0a02 0%, #0d0503 50%, #1a0a02 100%);
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Comic Neue', cursive;
+    }
+    .maintenance-content {
+      text-align: center;
+      animation: gentleFloat 5.52s ease-in-out infinite;
+    }
+    .maintenance-dog {
+      font-size: 120px;
+      margin-bottom: 20px;
+      animation: dogPulse 2s ease-in-out infinite;
+    }
+    .maintenance-content h1 {
+      font-size: 48px;
+      color: #fb923c;
+      margin: 0 0 10px 0;
+      text-shadow: 0 0 30px rgba(251, 146, 60, 0.5);
+    }
+    .maintenance-subtitle {
+      color: #888;
+      font-size: 18px;
+      margin: 0 0 30px 0;
+    }
+    .maintenance-k {
+      font-size: 72px;
+      font-weight: bold;
+      color: #fbbf24;
+      text-shadow: 0 0 40px rgba(251, 191, 36, 0.6);
+      margin: 20px 0;
+    }
+    .maintenance-message {
+      color: #666;
+      font-size: 14px;
+      margin: 20px 0;
+    }
+    .maintenance-links {
+      margin-top: 30px;
+      display: flex;
+      gap: 15px;
+      justify-content: center;
+      align-items: center;
+    }
+    .maintenance-links a {
+      color: #fb923c;
+      text-decoration: none;
+      font-size: 14px;
+    }
+    .maintenance-links a:hover {
+      text-decoration: underline;
+    }
+    .maintenance-links span {
+      color: #444;
+    }
+    @keyframes gentleFloat {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+    @keyframes dogPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+  </style>
+
   <a href="#main-content" class="skip-link">Skip to main content</a>
   <div class="app">
     <!-- Header -->
@@ -1008,10 +1097,60 @@ chaos is a filter 🔥
     }
 
     // ============================================
+    // Maintenance Mode
+    // ============================================
+    async function checkMaintenanceMode() {
+      try {
+        const res = await fetch(`${API_BASE}/k-metric/status`);
+        const data = await res.json();
+
+        // Check if maintenance mode is enabled via API or if Helius is down
+        if (data.maintenance || data.error) {
+          showMaintenanceMode(data.k || 87);
+          return true;
+        }
+
+        // Check URL param for forced maintenance
+        if (new URLSearchParams(window.location.search).has('maintenance')) {
+          showMaintenanceMode(data.k || 87);
+          return true;
+        }
+
+        return false;
+      } catch (e) {
+        // API unreachable - show maintenance
+        showMaintenanceMode(87);
+        return true;
+      }
+    }
+
+    function showMaintenanceMode(k) {
+      const overlay = document.getElementById('maintenance-overlay');
+      const kSpan = document.getElementById('maintenance-k');
+      if (overlay) {
+        overlay.style.display = 'flex';
+        if (kSpan) kSpan.textContent = k;
+      }
+    }
+
+    function hideMaintenanceMode() {
+      const overlay = document.getElementById('maintenance-overlay');
+      if (overlay) overlay.style.display = 'none';
+    }
+
+    // ============================================
     // Init
     // ============================================
     async function init() {
       console.log('[App] Initializing K-Metric Dashboard...');
+
+      // Check maintenance mode first
+      const inMaintenance = await checkMaintenanceMode();
+      if (inMaintenance) {
+        console.log('[App] Maintenance mode active');
+        // Still try to show cached K value
+        return;
+      }
 
       elements.refreshBtn.addEventListener('click', refresh);
       elements.shareBtn.addEventListener('click', shareOnTwitter);

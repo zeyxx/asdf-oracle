@@ -26,6 +26,9 @@ import security from './security.js';
 // API Key for service authentication (ASDev, etc.)
 const ORACLE_API_KEY = process.env.ORACLE_API_KEY || process.env.ADMIN_API_KEY;
 
+// Maintenance mode flag (set MAINTENANCE=1 to enable)
+const MAINTENANCE_MODE = process.env.MAINTENANCE === '1' || process.env.MAINTENANCE === 'true';
+
 // Simple router implementation (no Express dependency)
 const routes = {
   'GET /k-metric': handleGetKMetric,
@@ -239,6 +242,7 @@ async function handleGetStatus(req, res) {
       description: 'Webhook (real-time) + Polling (5min fallback)',
       gating: gatingStatus,
       queue: walletScore.getQueueStats(),
+      maintenance: MAINTENANCE_MODE,
     });
   } catch (error) {
     log('ERROR', `Status error: ${error.message}`);
