@@ -21,6 +21,7 @@ import walletScore from './wallet-score.js';
 import tokenScore from './token-score.js';
 import security from './security.js';
 import webhooks from './webhooks.js';
+import ws from './ws.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.join(__dirname, '..');
@@ -245,6 +246,17 @@ async function main() {
     res.end('<h1>404 Not Found</h1>');
   });
 
+  // WebSocket upgrade handler
+  server.on('upgrade', (req, socket, head) => {
+    const origin = req.headers.origin;
+    if (origin && !isOriginAllowed(origin)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    ws.handleUpgrade(req, socket, head);
+  });
+
   server.listen(PORT, () => {
     log('INFO', '═══════════════════════════════════════════');
     log('INFO', `🔥 K-Metric Oracle running on port ${PORT}`);
@@ -263,6 +275,8 @@ async function main() {
     log('INFO', `  GET  /api/v1/status                  → Oracle status`);
     log('INFO', `  GET  /api/v1/token/:mint             → Token K score`);
     log('INFO', `  GET  /api/v1/wallet/:addr            → Wallet K scores`);
+    log('INFO', 'WebSocket:');
+    log('INFO', `  ws://localhost:${PORT}/ws?key=API_KEY → Real-time events`);
     log('INFO', '───────────────────────────────────────────');
     log('INFO', 'Sync: Webhook + Polling fallback (5min)');
     log('INFO', '═══════════════════════════════════════════');

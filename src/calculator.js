@@ -10,6 +10,7 @@
 import db from './db.js';
 import { pct, log, loadEnv } from './utils.js';
 import webhooks from './webhooks.js';
+import ws from './ws.js';
 
 loadEnv();
 
@@ -145,16 +146,27 @@ export async function calculateAndSave() {
     await db.saveSnapshot(data);
     log('INFO', 'Snapshot saved');
 
-    // Trigger k_change webhook if delta > 1%
+    // Trigger k_change webhook and WebSocket broadcast if delta > 1%
     if (lastK !== null) {
       const delta = data.k - lastK;
       if (Math.abs(delta) >= 1) {
-        webhooks.triggerKChange({
+        const changeData = {
           previousK: lastK,
           newK: data.k,
           delta,
           holders: data.holders,
-        }).catch(err => log('ERROR', `[Webhook] k_change trigger failed: ${err.message}`));
+        };
+        // HTTP webhook
+        webhooks.triggerKChange(changeData)
+          .catch(err => log('ERROR', `[Webhook] k_change trigger failed: ${err.message}`));
+        // WebSocket broadcast
+        ws.broadcast('k', {
+          k: data.k,
+          holders: data.holders,
+          delta,
+          accumulators: data.accumulators,
+          maintained: data.maintained,
+        });
       }
     }
     lastK = data.k;

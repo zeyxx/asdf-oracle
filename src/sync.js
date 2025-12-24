@@ -9,6 +9,7 @@ import db from './db.js';
 import helius from './helius.js';
 import calculator from './calculator.js';
 import walletScore from './wallet-score.js';
+import ws from './ws.js';
 import { log } from './utils.js';
 
 const POLL_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -176,11 +177,33 @@ async function fetchNewTransactions() {
             amountChange: change.amountChange,
           });
 
-          // Update wallet balance
-          await updateWalletBalance(change);
+          // Update wallet balance and detect holder changes
+          const holderChange = await updateWalletBalance(change);
 
           // Queue K_wallet recalculation (high priority - tx triggered)
           await walletScore.enqueueWallet(change.wallet);
+
+          // WebSocket broadcast: transaction
+          ws.broadcast('tx', {
+            signature: change.signature,
+            wallet: change.wallet,
+            amount: change.amountChange,
+            slot: tx.slot,
+            type: change.amountChange > 0 ? 'buy' : 'sell',
+          });
+
+          // WebSocket broadcast: holder changes
+          if (holderChange === 'new') {
+            ws.broadcast('holder:new', {
+              address: change.wallet,
+              balance: change.amountChange,
+            });
+          } else if (holderChange === 'exit') {
+            ws.broadcast('holder:exit', {
+              address: change.wallet,
+              lastBalance: Math.abs(change.amountChange),
+            });
+          }
 
           processed++;
         }
@@ -208,13 +231,15 @@ async function fetchNewTransactions() {
 
 /**
  * Update wallet balance from a transfer
+ * @returns {'new'|'exit'|null} Holder change type
  */
 async function updateWalletBalance(change) {
   const wallets = await db.getWallets(0);
   const existing = wallets.find(w => w.address === change.wallet);
 
   if (existing) {
-    const newBalance = Number(existing.current_balance) + change.amountChange;
+    const oldBalance = Number(existing.current_balance);
+    const newBalance = oldBalance + change.amountChange;
     await db.upsertWallet({
       address: change.wallet,
       balance: Math.max(0, newBalance),
@@ -224,6 +249,11 @@ async function updateWalletBalance(change) {
       sent: change.amountChange < 0 ? Math.abs(change.amountChange) : 0,
       lastTxSig: change.signature,
     });
+    // Detect exit: had balance, now zero
+    if (oldBalance > 0 && newBalance <= 0) {
+      return 'exit';
+    }
+    return null;
   } else if (change.amountChange > 0) {
     // New wallet
     await db.upsertWallet({
@@ -235,7 +265,9 @@ async function updateWalletBalance(change) {
       sent: 0,
       lastTxSig: change.signature,
     });
+    return 'new';
   }
+  return null;
 }
 
 /**
