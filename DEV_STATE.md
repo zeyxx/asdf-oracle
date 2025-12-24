@@ -1,51 +1,65 @@
-# Development State - 2024-12-23
+# K-Metric Oracle - Development State
 
-## Current Status: OPERATIONAL (Oracle API v2 + Webhooks)
+## Status: OPERATIONAL
 
-### Sprint 1: Multi-Tenant API (Complete)
+**Version:** API v2
+**Sync Mode:** Hybrid (webhook + 5min polling fallback)
+**Database:** SQLite with automated backups (6h)
 
-#### API Keys
-- Tier-based access control (free/standard/premium/internal)
-- Rate Limiting V2 with daily quotas
-- Usage tracking per key
+### Live Stats
+| Metric | Value |
+|--------|-------|
+| K Score | 87% |
+| Holders | 408 |
+| Transactions | 64,090 |
+| Snapshots | 47 |
 
-#### Batch Endpoints
-- `POST /api/v1/wallets` - Batch K_wallet lookup (max 100)
-- `POST /api/v1/tokens` - Batch Token K lookup (max 50)
-- `GET /api/v1/holders` - Filtered holders list
+---
 
-### Sprint 2: Webhooks (Complete)
+## API Reference
 
-#### Outbound Notifications
-Clients can subscribe to events and receive POST notifications.
+### Dashboard API (`/k-metric`)
 
-**Event Types:**
-| Event | Description |
-|-------|-------------|
-| `k_change` | K metric changes by more than 1% |
-| `holder_new` | New holder detected |
-| `holder_exit` | Holder exits (balance = 0) |
-| `threshold_alert` | K crosses a configured threshold |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/k-metric` | Current K score + holder breakdown |
+| GET | `/k-metric/history` | Historical snapshots |
+| GET | `/k-metric/holders` | All holders with classifications |
+| GET | `/k-metric/status` | Sync status + queue health |
+| GET | `/k-metric/wallet/:addr/k-score` | Wallet K for primary token |
+| GET | `/k-metric/wallet/:addr/k-global` | Wallet K across all tokens |
+| POST | `/k-metric/webhook` | Helius webhook receiver |
 
-**Webhook Endpoints:**
-```
-GET  /api/v1/webhooks/events       - List available events
-GET  /api/v1/webhooks              - List your webhooks
-POST /api/v1/webhooks              - Create webhook
-GET  /api/v1/webhooks/:id          - Get webhook details
-DELETE /api/v1/webhooks/:id        - Delete webhook
-GET  /api/v1/webhooks/:id/deliveries - Delivery history
-```
+### Oracle API v1 (`/api/v1`)
 
-**Security:**
-- HMAC-SHA256 signature in `X-Oracle-Signature` header
-- 3 retry attempts with exponential backoff (1m, 5m, 15m)
-- Auto-disable after 5 consecutive failures
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/status` | Oracle status |
+| GET | `/api/v1/token/:mint` | K score for any PumpFun token |
+| GET | `/api/v1/wallet/:addr` | Wallet scores |
+| POST | `/api/v1/wallets` | Batch wallet lookup (max 100) |
+| POST | `/api/v1/tokens` | Batch token lookup (max 50) |
+| GET | `/api/v1/holders` | Filtered holders by K score |
 
-### API Keys Active
-- **ASDev** (internal): `oracle_internal_2dc663e977854253b7da646a1506438c`
+### Webhooks (`/api/v1/webhooks`)
 
-### Tier Limits
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/webhooks/events` | List available events |
+| GET | `/api/v1/webhooks` | List subscriptions |
+| POST | `/api/v1/webhooks` | Create subscription |
+| DELETE | `/api/v1/webhooks/:id` | Delete subscription |
+| GET | `/api/v1/webhooks/:id/deliveries` | Delivery history |
+
+**Events:** `k_change`, `holder_new`, `holder_exit`, `threshold_alert`
+
+---
+
+## Authentication
+
+### API Keys
+Header: `X-Oracle-Key: <key>`
+
 | Tier | Requests/min | Requests/day |
 |------|--------------|--------------|
 | public | 100 | 10,000 |
@@ -54,59 +68,35 @@ GET  /api/v1/webhooks/:id/deliveries - Delivery history
 | premium | 5,000 | 500,000 |
 | internal | unlimited | unlimited |
 
-### Example: Create Webhook
+### Webhook Security
+- HMAC-SHA256 signature in `X-Oracle-Signature` header
+- Exponential backoff retry (1m, 5m, 15m)
+- Auto-disable after 5 consecutive failures
+
+---
+
+## Commands
 ```bash
-curl -X POST http://localhost:3001/api/v1/webhooks \
-  -H "X-Oracle-Key: oracle_internal_xxxxx" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://your-app.com/webhook",
-    "events": ["k_change", "holder_new"]
-  }'
+npm start        # Run server
+npm run dev      # Development mode (--watch)
+npm run backfill # Initial sync from Helius
 ```
 
-### Example: Webhook Payload
-```json
-{
-  "event": "k_change",
-  "timestamp": 1766535836,
-  "data": {
-    "previous_k": 85,
-    "new_k": 87,
-    "delta": 2,
-    "holders": 407,
-    "direction": "up"
-  }
-}
+---
+
+## Architecture
 ```
-
-### Signature Verification (Client Side)
-```javascript
-const crypto = require('crypto');
-
-function verifySignature(payload, signature, secret) {
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(JSON.stringify(payload))
-    .digest('hex');
-  return signature === expected;
-}
+src/
+├── server.js       HTTP server, CORS, rate limiting
+├── router.js       API route handlers
+├── sync.js         Hybrid sync (webhook + polling)
+├── webhook.js      Helius webhook processor
+├── calculator.js   K-metric calculation
+├── wallet-score.js K_wallet background queue
+├── token-score.js  Token K scoring
+├── webhooks.js     Outbound webhook dispatcher
+├── security.js     Rate limiting, validation
+├── gating.js       Token-gated access control
+├── db.js           SQLite persistence
+└── utils.js        Logging, env loading
 ```
-
-### Database Stats
-- 407 holders tracked
-- K = 86%
-- 1 API key active
-- 2 webhook subscriptions
-
-### Commands
-```bash
-npm start              # Run server
-npm run dev            # Run with --watch
-npm run backfill       # Initial sync
-```
-
-### Next Steps (Sprint 3)
-- [ ] OpenAPI/Swagger spec
-- [ ] Admin dashboard UI (GCRTRD)
-- [ ] On-chain oracle integration (future)
