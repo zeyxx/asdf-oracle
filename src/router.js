@@ -18,6 +18,7 @@ import tokenScore from './token-score.js';
 import gating from './gating.js';
 import kolscan from './kolscan.js';
 import { loadEnv, log } from './utils.js';
+import webhooks from './webhooks.js';
 
 loadEnv();
 
@@ -46,18 +47,36 @@ const routes = {
   'POST /k-metric/admin/batch-k': handleAdminBatchK,
   'POST /k-metric/admin/backfill-k-wallet': handleAdminBackfillKWallet,
   'GET /k-metric/admin/k-wallet-queue': handleAdminKWalletQueue,
+  // Admin - API Key Management
+  'POST /k-metric/admin/api-keys': handleAdminCreateApiKey,
+  'GET /k-metric/admin/api-keys': handleAdminListApiKeys,
+  'GET /k-metric/admin/usage-stats': handleAdminUsageStats,
   // API v1 - Oracle endpoints for ASDev
   'GET /api/v1/status': handleApiV1Status,
+  'GET /api/v1/holders': handleApiV1Holders,
+  'POST /api/v1/wallets': handleApiV1WalletsBatch,
+  'POST /api/v1/tokens': handleApiV1TokensBatch,
+  // API v1 - Webhooks
+  'GET /api/v1/webhooks': handleApiV1ListWebhooks,
+  'POST /api/v1/webhooks': handleApiV1CreateWebhook,
+  'GET /api/v1/webhooks/events': handleApiV1WebhookEvents,
 };
 
 // Dynamic routes (with parameters)
 const dynamicRoutes = [
   { pattern: /^GET \/k-metric\/wallet\/([A-Za-z0-9]{32,44})\/k-score$/, handler: handleGetWalletKScore },
   { pattern: /^GET \/k-metric\/wallet\/([A-Za-z0-9]{32,44})\/k-global$/, handler: handleGetWalletKGlobal },
+  // Admin - API Key Management (dynamic)
+  { pattern: /^DELETE \/k-metric\/admin\/api-keys\/([a-f0-9-]{36})$/, handler: handleAdminRevokeApiKey },
+  { pattern: /^GET \/k-metric\/admin\/api-keys\/([a-f0-9-]{36})\/usage$/, handler: handleAdminApiKeyUsage },
   // API v1 - Token K score (any PumpFun/Ignition token)
   { pattern: /^GET \/api\/v1\/token\/([A-Za-z0-9]{32,44})$/, handler: handleApiV1Token },
   // API v1 - Wallet K score
   { pattern: /^GET \/api\/v1\/wallet\/([A-Za-z0-9]{32,44})$/, handler: handleApiV1Wallet },
+  // API v1 - Webhooks (dynamic)
+  { pattern: /^GET \/api\/v1\/webhooks\/([a-f0-9-]{36})$/, handler: handleApiV1GetWebhook },
+  { pattern: /^DELETE \/api\/v1\/webhooks\/([a-f0-9-]{36})$/, handler: handleApiV1DeleteWebhook },
+  { pattern: /^GET \/api\/v1\/webhooks\/([a-f0-9-]{36})\/deliveries$/, handler: handleApiV1WebhookDeliveries },
 ];
 
 /**
@@ -614,6 +633,188 @@ async function handleAdminKWalletQueue(req, res) {
   }
 }
 
+// ============================================
+// Admin - API Key Management
+// ============================================
+
+/**
+ * POST /k-metric/admin/api-keys - Create new API key
+ * Body: { name, tier?, rate_limit_minute?, rate_limit_day?, expires_at? }
+ */
+async function handleAdminCreateApiKey(req, res) {
+  try {
+    if (!requireAdmin(req)) {
+      return sendJson(res, 401, { error: 'Admin access required', hint: 'Set X-Admin-Key header' });
+    }
+
+    const { name, tier, rate_limit_minute, rate_limit_day, expires_at } = req.body || {};
+
+    if (!name || typeof name !== 'string') {
+      return sendJson(res, 400, { error: 'name is required' });
+    }
+
+    // Validate tier
+    const validTiers = ['free', 'standard', 'premium', 'internal'];
+    if (tier && !validTiers.includes(tier)) {
+      return sendJson(res, 400, { error: 'Invalid tier', valid: validTiers });
+    }
+
+    const result = await db.createApiKey({
+      name,
+      tier: tier || 'standard',
+      rateLimitMinute: rate_limit_minute,
+      rateLimitDay: rate_limit_day,
+      expiresAt: expires_at,
+    });
+
+    log('INFO', `[Admin] Created API key: ${result.id} (${name}, tier: ${result.tier})`);
+
+    sendJson(res, 201, {
+      ...result,
+      message: 'API key created. Save the key now - it cannot be retrieved later!',
+      warning: 'This is the only time the full key will be shown.',
+    });
+  } catch (error) {
+    log('ERROR', `Admin create API key error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /k-metric/admin/api-keys - List all API keys
+ */
+async function handleAdminListApiKeys(req, res) {
+  try {
+    if (!requireAdmin(req)) {
+      return sendJson(res, 401, { error: 'Admin access required', hint: 'Set X-Admin-Key header' });
+    }
+
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const includeInactive = url.searchParams.get('include_inactive') === 'true';
+
+    const keys = await db.listApiKeys({ activeOnly: !includeInactive });
+
+    // Get usage stats for each key
+    const keysWithUsage = await Promise.all(keys.map(async (key) => {
+      const todayUsage = await db.getTodayUsage(key.id);
+      return {
+        id: key.id,
+        name: key.name,
+        tier: key.tier,
+        rate_limit_minute: key.rate_limit_minute,
+        rate_limit_day: key.rate_limit_day,
+        is_active: !!key.is_active,
+        created_at: key.created_at,
+        expires_at: key.expires_at,
+        last_used_at: key.last_used_at,
+        today_requests: todayUsage,
+      };
+    }));
+
+    sendJson(res, 200, {
+      keys: keysWithUsage,
+      total: keysWithUsage.length,
+    });
+  } catch (error) {
+    log('ERROR', `Admin list API keys error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * DELETE /k-metric/admin/api-keys/:id - Revoke API key
+ */
+async function handleAdminRevokeApiKey(req, res, params) {
+  try {
+    if (!requireAdmin(req)) {
+      return sendJson(res, 401, { error: 'Admin access required', hint: 'Set X-Admin-Key header' });
+    }
+
+    const keyId = params[0];
+
+    // Check if key exists
+    const key = await db.getApiKey(keyId);
+    if (!key) {
+      return sendJson(res, 404, { error: 'API key not found' });
+    }
+
+    const revoked = await db.revokeApiKey(keyId);
+
+    if (revoked) {
+      log('INFO', `[Admin] Revoked API key: ${keyId} (${key.name})`);
+      sendJson(res, 200, { success: true, message: 'API key revoked' });
+    } else {
+      sendJson(res, 500, { error: 'Failed to revoke key' });
+    }
+  } catch (error) {
+    log('ERROR', `Admin revoke API key error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /k-metric/admin/api-keys/:id/usage - Get usage history for API key
+ */
+async function handleAdminApiKeyUsage(req, res, params) {
+  try {
+    if (!requireAdmin(req)) {
+      return sendJson(res, 401, { error: 'Admin access required', hint: 'Set X-Admin-Key header' });
+    }
+
+    const keyId = params[0];
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const days = parseInt(url.searchParams.get('days') || '30');
+
+    // Check if key exists
+    const key = await db.getApiKey(keyId);
+    if (!key) {
+      return sendJson(res, 404, { error: 'API key not found' });
+    }
+
+    const history = await db.getUsageHistory(keyId, days);
+    const todayUsage = await db.getTodayUsage(keyId);
+
+    sendJson(res, 200, {
+      key: {
+        id: key.id,
+        name: key.name,
+        tier: key.tier,
+      },
+      today: todayUsage,
+      history,
+      period_days: days,
+    });
+  } catch (error) {
+    log('ERROR', `Admin API key usage error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /k-metric/admin/usage-stats - Get usage stats for all keys
+ */
+async function handleAdminUsageStats(req, res) {
+  try {
+    if (!requireAdmin(req)) {
+      return sendJson(res, 401, { error: 'Admin access required', hint: 'Set X-Admin-Key header' });
+    }
+
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const days = parseInt(url.searchParams.get('days') || '7');
+
+    const stats = await db.getUsageStats(days);
+
+    sendJson(res, 200, {
+      stats,
+      period_days: days,
+      tier_limits: security.getTierLimits(),
+    });
+  } catch (error) {
+    log('ERROR', `Admin usage stats error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
 /**
  * POST /k-metric/webhook - Helius webhook handler
  */
@@ -805,6 +1006,466 @@ async function handleApiV1Wallet(req, res, params) {
     });
   } catch (error) {
     log('ERROR', `API v1 wallet error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+// ============================================
+// API v1 - Batch Endpoints
+// ============================================
+
+/**
+ * POST /api/v1/wallets - Batch wallet K scores
+ * Body: { addresses: [...], filters: { k_min, classification } }
+ * Max 100 addresses per request
+ */
+async function handleApiV1WalletsBatch(req, res) {
+  try {
+    const { addresses, filters = {} } = req.body || {};
+
+    // Validate input
+    if (!Array.isArray(addresses) || addresses.length === 0) {
+      return sendJson(res, 400, { error: 'addresses array required' });
+    }
+
+    if (addresses.length > 100) {
+      return sendJson(res, 400, { error: 'Maximum 100 addresses per request' });
+    }
+
+    // Validate and filter addresses
+    const validAddresses = addresses.filter(addr => security.validateAddress(addr));
+    if (validAddresses.length === 0) {
+      return sendJson(res, 400, { error: 'No valid addresses provided' });
+    }
+
+    const results = [];
+    let ready = 0;
+    let queued = 0;
+    let calculating = 0;
+
+    for (const address of validAddresses) {
+      // Get K_wallet from DB
+      const kWalletDB = await walletScore.getKWalletFromDB(address);
+
+      if (kWalletDB) {
+        // Apply filters
+        if (filters.k_min !== undefined && kWalletDB.k_wallet < filters.k_min) {
+          continue; // Skip wallets below k_min
+        }
+
+        // Get classification from primary token
+        const kToken = await db.getWalletKScore(address);
+        const classification = kToken?.classification || null;
+
+        if (filters.classification && classification !== filters.classification) {
+          continue; // Skip wallets with different classification
+        }
+
+        results.push({
+          address,
+          k_wallet: kWalletDB.k_wallet,
+          tokens_analyzed: kWalletDB.tokens_analyzed,
+          classification,
+          status: 'ready',
+          updated_at: kWalletDB.updated_at,
+        });
+        ready++;
+      } else {
+        // Check if calculating
+        const status = walletScore.getWalletStatus(address);
+
+        if (status.status === 'calculating') {
+          results.push({
+            address,
+            status: 'calculating',
+            started_at: status.started_at,
+          });
+          calculating++;
+        } else {
+          // Queue for calculation
+          await walletScore.enqueueWallet(address);
+          results.push({
+            address,
+            status: 'queued',
+          });
+          queued++;
+        }
+      }
+    }
+
+    sendJson(res, 200, {
+      results,
+      summary: {
+        total: validAddresses.length,
+        ready,
+        queued,
+        calculating,
+        filtered_out: validAddresses.length - results.length,
+      },
+      filters_applied: filters,
+      queue_stats: walletScore.getQueueStats(),
+    });
+  } catch (error) {
+    log('ERROR', `API v1 wallets batch error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * POST /api/v1/tokens - Batch token K scores
+ * Body: { mints: [...], filters: { k_min } }
+ * Max 50 tokens per request
+ */
+async function handleApiV1TokensBatch(req, res) {
+  try {
+    const { mints, filters = {} } = req.body || {};
+
+    // Validate input
+    if (!Array.isArray(mints) || mints.length === 0) {
+      return sendJson(res, 400, { error: 'mints array required' });
+    }
+
+    if (mints.length > 50) {
+      return sendJson(res, 400, { error: 'Maximum 50 tokens per request' });
+    }
+
+    // Validate addresses and token types
+    const validMints = mints.filter(mint =>
+      security.validateAddress(mint) && tokenScore.isValidToken(mint)
+    );
+
+    if (validMints.length === 0) {
+      return sendJson(res, 400, {
+        error: 'No valid token mints provided',
+        hint: 'Only PumpFun (*pump), Ignition (*asdf), and dev.fun (*dev) tokens are supported',
+      });
+    }
+
+    const results = [];
+    let ready = 0;
+    let queued = 0;
+    let syncing = 0;
+
+    for (const mint of validMints) {
+      const result = await tokenScore.getTokenK(mint);
+
+      // Apply filters
+      if (result.k !== undefined && filters.k_min !== undefined) {
+        if (result.k < filters.k_min) {
+          continue; // Skip tokens below k_min
+        }
+      }
+
+      results.push({
+        mint,
+        k: result.k,
+        holders: result.holders,
+        quality: result.quality,
+        status: result.status || 'ready',
+      });
+
+      if (result.status === 'queued') queued++;
+      else if (result.status === 'syncing') syncing++;
+      else ready++;
+    }
+
+    sendJson(res, 200, {
+      results,
+      summary: {
+        total: validMints.length,
+        ready,
+        queued,
+        syncing,
+        filtered_out: validMints.length - results.length,
+      },
+      filters_applied: filters,
+      queue_stats: await tokenScore.getQueueStats(),
+    });
+  } catch (error) {
+    log('ERROR', `API v1 tokens batch error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /api/v1/holders - Get filtered holders list
+ * Query params: k_min, classification, limit
+ */
+async function handleApiV1Holders(req, res) {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const kMin = url.searchParams.get('k_min') ? parseInt(url.searchParams.get('k_min')) : null;
+    const classification = url.searchParams.get('classification') || null;
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '100'), 500);
+
+    // Validate classification if provided
+    const validClassifications = ['accumulator', 'holder', 'reducer', 'extractor'];
+    if (classification && !validClassifications.includes(classification)) {
+      return sendJson(res, 400, {
+        error: 'Invalid classification',
+        valid: validClassifications,
+      });
+    }
+
+    // Get filtered holders from DB
+    const holders = await db.getHoldersFiltered({
+      kMin,
+      classification,
+      limit,
+    });
+
+    // Count by classification
+    const breakdown = {
+      accumulator: 0,
+      holder: 0,
+      reducer: 0,
+      extractor: 0,
+    };
+    holders.forEach(h => {
+      if (breakdown[h.classification] !== undefined) {
+        breakdown[h.classification]++;
+      }
+    });
+
+    sendJson(res, 200, {
+      holders,
+      total: holders.length,
+      breakdown,
+      filters_applied: {
+        k_min: kMin,
+        classification,
+        limit,
+      },
+    });
+  } catch (error) {
+    log('ERROR', `API v1 holders error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+// ============================================
+// API v1 - Webhook Endpoints
+// ============================================
+
+/**
+ * Require valid API key for webhook endpoints
+ */
+function requireApiKey(req) {
+  return req.apiKeyMeta && req.apiKeyMeta.is_active;
+}
+
+/**
+ * GET /api/v1/webhooks/events - List available event types
+ */
+async function handleApiV1WebhookEvents(req, res) {
+  try {
+    const events = db.getWebhookEventTypes();
+    sendJson(res, 200, {
+      events,
+      description: {
+        k_change: 'Triggered when K metric changes by more than 1%',
+        holder_new: 'Triggered when a new holder is detected',
+        holder_exit: 'Triggered when a holder exits (balance = 0)',
+        threshold_alert: 'Triggered when K crosses a configured threshold',
+      },
+    });
+  } catch (error) {
+    log('ERROR', `Webhook events error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /api/v1/webhooks - List webhooks for current API key
+ */
+async function handleApiV1ListWebhooks(req, res) {
+  try {
+    if (!requireApiKey(req)) {
+      return sendJson(res, 401, { error: 'API key required', hint: 'Set X-Oracle-Key header' });
+    }
+
+    const webhooksList = await db.listWebhookSubscriptions(req.apiKeyMeta.id);
+
+    sendJson(res, 200, {
+      webhooks: webhooksList.map(w => ({
+        id: w.id,
+        url: w.url,
+        events: w.events,
+        is_active: !!w.is_active,
+        failure_count: w.failure_count,
+        last_triggered_at: w.last_triggered_at,
+        created_at: w.created_at,
+      })),
+      total: webhooksList.length,
+    });
+  } catch (error) {
+    log('ERROR', `List webhooks error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * POST /api/v1/webhooks - Create webhook subscription
+ * Body: { url, events: [...], secret? }
+ */
+async function handleApiV1CreateWebhook(req, res) {
+  try {
+    if (!requireApiKey(req)) {
+      return sendJson(res, 401, { error: 'API key required', hint: 'Set X-Oracle-Key header' });
+    }
+
+    const { url, events, secret } = req.body || {};
+
+    if (!url || typeof url !== 'string') {
+      return sendJson(res, 400, { error: 'url is required' });
+    }
+
+    if (!events || !Array.isArray(events) || events.length === 0) {
+      return sendJson(res, 400, {
+        error: 'events array is required',
+        valid_events: db.getWebhookEventTypes(),
+      });
+    }
+
+    // Validate URL format
+    try {
+      new URL(url);
+    } catch {
+      return sendJson(res, 400, { error: 'Invalid URL format' });
+    }
+
+    // Generate secret if not provided
+    const { randomBytes } = await import('crypto');
+    const webhookSecret = secret || randomBytes(32).toString('hex');
+
+    const webhook = await db.createWebhookSubscription({
+      apiKeyId: req.apiKeyMeta.id,
+      url,
+      events,
+      secret: webhookSecret,
+    });
+
+    log('INFO', `[Webhook] Created subscription ${webhook.id} for ${req.apiKeyMeta.name}`);
+
+    sendJson(res, 201, {
+      ...webhook,
+      secret: webhookSecret,
+      message: 'Webhook created. Save the secret for signature verification.',
+      signature_header: 'X-Oracle-Signature',
+    });
+  } catch (error) {
+    log('ERROR', `Create webhook error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /api/v1/webhooks/:id - Get webhook details
+ */
+async function handleApiV1GetWebhook(req, res, params) {
+  try {
+    if (!requireApiKey(req)) {
+      return sendJson(res, 401, { error: 'API key required' });
+    }
+
+    const webhookId = params[0];
+    const webhook = await db.getWebhookSubscription(webhookId);
+
+    if (!webhook) {
+      return sendJson(res, 404, { error: 'Webhook not found' });
+    }
+
+    // Verify ownership
+    if (webhook.api_key_id !== req.apiKeyMeta.id) {
+      return sendJson(res, 403, { error: 'Access denied' });
+    }
+
+    sendJson(res, 200, {
+      id: webhook.id,
+      url: webhook.url,
+      events: webhook.events,
+      is_active: !!webhook.is_active,
+      failure_count: webhook.failure_count,
+      last_triggered_at: webhook.last_triggered_at,
+      created_at: webhook.created_at,
+    });
+  } catch (error) {
+    log('ERROR', `Get webhook error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * DELETE /api/v1/webhooks/:id - Delete webhook
+ */
+async function handleApiV1DeleteWebhook(req, res, params) {
+  try {
+    if (!requireApiKey(req)) {
+      return sendJson(res, 401, { error: 'API key required' });
+    }
+
+    const webhookId = params[0];
+    const webhook = await db.getWebhookSubscription(webhookId);
+
+    if (!webhook) {
+      return sendJson(res, 404, { error: 'Webhook not found' });
+    }
+
+    // Verify ownership
+    if (webhook.api_key_id !== req.apiKeyMeta.id) {
+      return sendJson(res, 403, { error: 'Access denied' });
+    }
+
+    await db.deleteWebhookSubscription(webhookId);
+
+    log('INFO', `[Webhook] Deleted subscription ${webhookId}`);
+    sendJson(res, 200, { success: true, message: 'Webhook deleted' });
+  } catch (error) {
+    log('ERROR', `Delete webhook error: ${error.message}`);
+    sendJson(res, 500, { error: error.message });
+  }
+}
+
+/**
+ * GET /api/v1/webhooks/:id/deliveries - Get delivery history
+ */
+async function handleApiV1WebhookDeliveries(req, res, params) {
+  try {
+    if (!requireApiKey(req)) {
+      return sendJson(res, 401, { error: 'API key required' });
+    }
+
+    const webhookId = params[0];
+    const webhook = await db.getWebhookSubscription(webhookId);
+
+    if (!webhook) {
+      return sendJson(res, 404, { error: 'Webhook not found' });
+    }
+
+    // Verify ownership
+    if (webhook.api_key_id !== req.apiKeyMeta.id) {
+      return sendJson(res, 403, { error: 'Access denied' });
+    }
+
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
+
+    const deliveries = await db.getWebhookDeliveryHistory(webhookId, limit);
+
+    sendJson(res, 200, {
+      deliveries: deliveries.map(d => ({
+        id: d.id,
+        event_type: d.event_type,
+        status: d.status,
+        attempts: d.attempts,
+        response_code: d.response_code,
+        created_at: d.created_at,
+        completed_at: d.completed_at,
+      })),
+      total: deliveries.length,
+    });
+  } catch (error) {
+    log('ERROR', `Webhook deliveries error: ${error.message}`);
     sendJson(res, 500, { error: error.message });
   }
 }

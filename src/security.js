@@ -56,7 +56,149 @@ setInterval(() => {
       rateLimits.delete(key);
     }
   }
+  // Also cleanup v2 rate limits
+  for (const [key, limit] of rateLimitsV2.entries()) {
+    if (now > limit.resetAt + RATE_LIMIT_WINDOW) {
+      rateLimitsV2.delete(key);
+    }
+  }
 }, 5 * 60 * 1000);
+
+// ============================================
+// Rate Limiting V2 (tier-based, API key support)
+// ============================================
+const rateLimitsV2 = new Map();
+
+// Tier configuration
+const TIER_LIMITS = {
+  public:   { minute: 100,   day: 10000 },   // Token-gated or anonymous
+  free:     { minute: 500,   day: 50000 },   // Free API key
+  standard: { minute: 1000,  day: 100000 },  // Standard API key
+  premium:  { minute: 5000,  day: 500000 },  // Premium API key
+  internal: { minute: null,  day: null },    // Internal services (unlimited)
+};
+
+/**
+ * Rate limit V2 - supports API keys with tier-based limits
+ * @param {string} identifier - API key ID or IP address
+ * @param {object} apiKeyMeta - API key metadata from db.validateApiKey() or null for public
+ * @returns {{ allowed, remaining, limit, resetAt, tier, dailyRemaining, dailyLimit }}
+ */
+export function rateLimitV2(identifier, apiKeyMeta = null) {
+  const now = Date.now();
+  const tier = apiKeyMeta?.tier || 'public';
+  const limits = TIER_LIMITS[tier] || TIER_LIMITS.public;
+
+  // Internal tier = unlimited
+  if (tier === 'internal' || limits.minute === null) {
+    return {
+      allowed: true,
+      remaining: Infinity,
+      limit: Infinity,
+      resetAt: now + RATE_LIMIT_WINDOW,
+      tier,
+      dailyRemaining: Infinity,
+      dailyLimit: Infinity,
+    };
+  }
+
+  // Use API key limits if provided, otherwise tier defaults
+  const minuteLimit = apiKeyMeta?.rate_limit_minute ?? limits.minute;
+  const dayLimit = apiKeyMeta?.rate_limit_day ?? limits.day;
+
+  const key = identifier || 'unknown';
+
+  if (!rateLimitsV2.has(key)) {
+    rateLimitsV2.set(key, {
+      count: 1,
+      resetAt: now + RATE_LIMIT_WINDOW,
+      dailyCount: 1,
+      dailyResetAt: getEndOfDay(),
+    });
+    return {
+      allowed: true,
+      remaining: minuteLimit - 1,
+      limit: minuteLimit,
+      resetAt: now + RATE_LIMIT_WINDOW,
+      tier,
+      dailyRemaining: dayLimit - 1,
+      dailyLimit: dayLimit,
+    };
+  }
+
+  const limit = rateLimitsV2.get(key);
+
+  // Reset minute window if expired
+  if (now > limit.resetAt) {
+    limit.count = 0;
+    limit.resetAt = now + RATE_LIMIT_WINDOW;
+  }
+
+  // Reset daily window if expired
+  if (now > limit.dailyResetAt) {
+    limit.dailyCount = 0;
+    limit.dailyResetAt = getEndOfDay();
+  }
+
+  limit.count++;
+  limit.dailyCount++;
+
+  // Check daily limit first (more restrictive long-term)
+  if (limit.dailyCount > dayLimit) {
+    return {
+      allowed: false,
+      remaining: 0,
+      limit: minuteLimit,
+      resetAt: limit.resetAt,
+      retryAfter: Math.ceil((limit.dailyResetAt - now) / 1000),
+      tier,
+      dailyRemaining: 0,
+      dailyLimit: dayLimit,
+      reason: 'daily_limit_exceeded',
+    };
+  }
+
+  // Check minute limit
+  if (limit.count > minuteLimit) {
+    return {
+      allowed: false,
+      remaining: 0,
+      limit: minuteLimit,
+      resetAt: limit.resetAt,
+      retryAfter: Math.ceil((limit.resetAt - now) / 1000),
+      tier,
+      dailyRemaining: dayLimit - limit.dailyCount,
+      dailyLimit: dayLimit,
+      reason: 'minute_limit_exceeded',
+    };
+  }
+
+  return {
+    allowed: true,
+    remaining: minuteLimit - limit.count,
+    limit: minuteLimit,
+    resetAt: limit.resetAt,
+    tier,
+    dailyRemaining: dayLimit - limit.dailyCount,
+    dailyLimit: dayLimit,
+  };
+}
+
+/**
+ * Get end of current day (UTC midnight)
+ */
+function getEndOfDay() {
+  const now = new Date();
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  return tomorrow.getTime();
+}
+
+/**
+ * Get tier limits configuration
+ */
+export function getTierLimits() {
+  return { ...TIER_LIMITS };
+}
 
 // ============================================
 // Input Validation
@@ -239,6 +381,8 @@ export function stopScheduledBackups() {
 
 export default {
   rateLimit,
+  rateLimitV2,
+  getTierLimits,
   validateWebhookPayload,
   validateAddress,
   sanitizeNumber,

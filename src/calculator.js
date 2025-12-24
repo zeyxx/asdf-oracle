@@ -9,10 +9,14 @@
 
 import db from './db.js';
 import { pct, log, loadEnv } from './utils.js';
+import webhooks from './webhooks.js';
 
 loadEnv();
 
 const MIN_BALANCE_FALLBACK = parseInt(process.env.MIN_BALANCE || '1000');
+
+// Track last K for change detection
+let lastK = null;
 const TOKEN_LAUNCH_TS = parseInt(process.env.TOKEN_LAUNCH_TS || '0');
 const OG_EARLY_WINDOW = parseInt(process.env.OG_EARLY_WINDOW || '21') * 86400; // days to seconds
 const OG_HOLD_THRESHOLD = parseInt(process.env.OG_HOLD_THRESHOLD || '55') * 86400; // days to seconds
@@ -133,12 +137,27 @@ export async function calculate() {
 
 /**
  * Calculate and save a snapshot
+ * Triggers k_change webhook if K changes significantly
  */
 export async function calculateAndSave() {
   const data = await calculate();
   if (data) {
     await db.saveSnapshot(data);
     log('INFO', 'Snapshot saved');
+
+    // Trigger k_change webhook if delta > 1%
+    if (lastK !== null) {
+      const delta = data.k - lastK;
+      if (Math.abs(delta) >= 1) {
+        webhooks.triggerKChange({
+          previousK: lastK,
+          newK: data.k,
+          delta,
+          holders: data.holders,
+        }).catch(err => log('ERROR', `[Webhook] k_change trigger failed: ${err.message}`));
+      }
+    }
+    lastK = data.k;
   }
   return data;
 }

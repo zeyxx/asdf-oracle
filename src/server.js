@@ -20,6 +20,7 @@ import sync from './sync.js';
 import walletScore from './wallet-score.js';
 import tokenScore from './token-score.js';
 import security from './security.js';
+import webhooks from './webhooks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.join(__dirname, '..');
@@ -163,8 +164,8 @@ async function main() {
     const origin = req.headers.origin;
     if (isOriginAllowed(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin || '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Helius-Signature');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Helius-Signature, X-Oracle-Key, X-Admin-Key');
     }
 
     if (req.method === 'OPTIONS') {
@@ -178,17 +179,45 @@ async function main() {
       return;
     }
 
-    // Rate limiting
+    // API Key extraction and validation
+    const apiKey = req.headers['x-oracle-key'];
+    let apiKeyMeta = null;
+
+    if (apiKey) {
+      apiKeyMeta = await db.validateApiKey(apiKey);
+      // Attach to request for downstream handlers
+      req.apiKeyMeta = apiKeyMeta;
+    }
+
+    // Rate limiting (V2 with tier support)
     const clientIp = req.headers['x-forwarded-for'] || req.socket?.remoteAddress;
-    const rateCheck = security.rateLimit(clientIp);
+    const rateLimitId = apiKeyMeta ? apiKeyMeta.id : clientIp; // Use API key ID if available
+    const rateCheck = security.rateLimitV2(rateLimitId, apiKeyMeta);
+
+    // Add rate limit headers
+    res.setHeader('X-RateLimit-Limit', rateCheck.limit === Infinity ? 'unlimited' : rateCheck.limit);
+    res.setHeader('X-RateLimit-Remaining', rateCheck.remaining === Infinity ? 'unlimited' : rateCheck.remaining);
+    res.setHeader('X-RateLimit-Reset', Math.floor(rateCheck.resetAt / 1000));
+    res.setHeader('X-RateLimit-Tier', rateCheck.tier);
 
     if (!rateCheck.allowed) {
       res.writeHead(429, {
         'Content-Type': 'application/json',
         'Retry-After': rateCheck.retryAfter
       });
-      res.end(JSON.stringify({ error: 'Too many requests', retryAfter: rateCheck.retryAfter }));
+      res.end(JSON.stringify({
+        error: 'Too many requests',
+        reason: rateCheck.reason,
+        retryAfter: rateCheck.retryAfter,
+        tier: rateCheck.tier,
+        hint: rateCheck.tier === 'public' ? 'Use an API key for higher limits' : 'Upgrade your tier for higher limits'
+      }));
       return;
+    }
+
+    // Track usage for API key holders
+    if (apiKeyMeta) {
+      db.incrementUsage(apiKeyMeta.id).catch(() => {}); // Fire and forget
     }
 
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -246,6 +275,9 @@ async function main() {
 
     // Start Token K queue worker
     tokenScore.startWorker();
+
+    // Start webhook delivery worker
+    webhooks.startWorker();
 
     // Start scheduled backups (every 6 hours)
     security.startScheduledBackups();

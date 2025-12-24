@@ -9,6 +9,7 @@
 import { existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { createHash, randomUUID } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
@@ -177,6 +178,76 @@ function migrate() {
     `CREATE INDEX IF NOT EXISTS idx_tokens_tier ON tokens(tier)`,
     `CREATE INDEX IF NOT EXISTS idx_tokens_sync ON tokens(last_sync)`,
     `CREATE INDEX IF NOT EXISTS idx_token_queue_next ON token_queue(locked_until, priority DESC)`,
+
+    // ================================================================
+    // API Keys & Multi-Tenant (API v2)
+    // ================================================================
+
+    // API keys table - multi-tenant access control
+    // tier: public (token-gated), free, standard, premium, internal
+    `CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      key_hash TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      tier TEXT DEFAULT 'standard',
+      rate_limit_minute INTEGER DEFAULT 1000,
+      rate_limit_day INTEGER DEFAULT 100000,
+      is_active INTEGER DEFAULT 1,
+      created_at INTEGER DEFAULT (unixepoch()),
+      expires_at INTEGER,
+      last_used_at INTEGER
+    )`,
+
+    // Daily usage aggregation per API key
+    `CREATE TABLE IF NOT EXISTS usage_daily (
+      key_id TEXT,
+      date TEXT,
+      requests INTEGER DEFAULT 0,
+      PRIMARY KEY (key_id, date)
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)`,
+    `CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(is_active)`,
+    `CREATE INDEX IF NOT EXISTS idx_usage_daily_date ON usage_daily(date)`,
+
+    // ================================================================
+    // Webhooks - Outbound notifications
+    // ================================================================
+
+    // Webhook subscriptions - clients register to receive events
+    `CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+      id TEXT PRIMARY KEY,
+      api_key_id TEXT,
+      url TEXT NOT NULL,
+      events TEXT NOT NULL,
+      secret TEXT NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      created_at INTEGER DEFAULT (unixepoch()),
+      last_triggered_at INTEGER,
+      failure_count INTEGER DEFAULT 0,
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
+    )`,
+
+    // Webhook delivery log - track all deliveries for debugging
+    `CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subscription_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      attempts INTEGER DEFAULT 0,
+      response_code INTEGER,
+      response_body TEXT,
+      created_at INTEGER DEFAULT (unixepoch()),
+      next_retry_at INTEGER,
+      completed_at INTEGER,
+      FOREIGN KEY (subscription_id) REFERENCES webhook_subscriptions(id)
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_webhook_subs_key ON webhook_subscriptions(api_key_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_webhook_subs_active ON webhook_subscriptions(is_active)`,
+    `CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_retry ON webhook_deliveries(next_retry_at)`,
   ];
 
   for (const sql of migrations) {
@@ -804,6 +875,501 @@ export async function cleanupTokenQueue(maxAttempts = 3) {
   stmt.run(maxAttempts);
 }
 
+// ============================================
+// API Keys & Multi-Tenant System
+// ============================================
+
+/**
+ * Hash an API key using SHA256
+ */
+function hashApiKey(key) {
+  return createHash('sha256').update(key).digest('hex');
+}
+
+/**
+ * Generate a new API key
+ * Format: oracle_[tier]_[random]
+ */
+function generateApiKey(tier = 'standard') {
+  const random = randomUUID().replace(/-/g, '');
+  return `oracle_${tier}_${random}`;
+}
+
+/**
+ * Create a new API key
+ * @returns {{ id, key, name, tier }} - key is plaintext (only returned once!)
+ */
+export async function createApiKey({ name, tier = 'standard', rateLimitMinute, rateLimitDay, expiresAt }) {
+  const db = await getDb();
+  const id = randomUUID();
+  const key = generateApiKey(tier);
+  const keyHash = hashApiKey(key);
+
+  // Tier defaults
+  const TIER_LIMITS = {
+    free:     { minute: 500,   day: 50000 },
+    standard: { minute: 1000,  day: 100000 },
+    premium:  { minute: 5000,  day: 500000 },
+    internal: { minute: null,  day: null },
+  };
+  const limits = TIER_LIMITS[tier] || TIER_LIMITS.standard;
+
+  const stmt = db.prepare(`
+    INSERT INTO api_keys (id, key_hash, name, tier, rate_limit_minute, rate_limit_day, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    id,
+    keyHash,
+    name,
+    tier,
+    rateLimitMinute ?? limits.minute,
+    rateLimitDay ?? limits.day,
+    expiresAt || null
+  );
+
+  return { id, key, name, tier }; // key returned only on creation!
+}
+
+/**
+ * Validate an API key and return its metadata
+ * Uses constant-time comparison via hash lookup
+ */
+export async function validateApiKey(key) {
+  if (!key) return null;
+
+  const db = await getDb();
+  const keyHash = hashApiKey(key);
+  const now = Math.floor(Date.now() / 1000);
+
+  const stmt = db.prepare(`
+    SELECT * FROM api_keys
+    WHERE key_hash = ? AND is_active = 1
+      AND (expires_at IS NULL OR expires_at > ?)
+  `);
+  const row = stmt.get(keyHash, now);
+
+  if (row) {
+    // Update last_used_at
+    const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
+    updateStmt.run(now, row.id);
+  }
+
+  return row || null;
+}
+
+/**
+ * Get API key by ID (for admin)
+ */
+export async function getApiKey(id) {
+  const db = await getDb();
+  const stmt = db.prepare('SELECT * FROM api_keys WHERE id = ?');
+  return stmt.get(id);
+}
+
+/**
+ * List all API keys (for admin)
+ */
+export async function listApiKeys({ activeOnly = true } = {}) {
+  const db = await getDb();
+  const stmt = activeOnly
+    ? db.prepare('SELECT * FROM api_keys WHERE is_active = 1 ORDER BY created_at DESC')
+    : db.prepare('SELECT * FROM api_keys ORDER BY created_at DESC');
+  return stmt.all();
+}
+
+/**
+ * Update API key
+ */
+export async function updateApiKey(id, { name, tier, rateLimitMinute, rateLimitDay, isActive, expiresAt }) {
+  const db = await getDb();
+
+  const updates = [];
+  const params = [];
+
+  if (name !== undefined) { updates.push('name = ?'); params.push(name); }
+  if (tier !== undefined) { updates.push('tier = ?'); params.push(tier); }
+  if (rateLimitMinute !== undefined) { updates.push('rate_limit_minute = ?'); params.push(rateLimitMinute); }
+  if (rateLimitDay !== undefined) { updates.push('rate_limit_day = ?'); params.push(rateLimitDay); }
+  if (isActive !== undefined) { updates.push('is_active = ?'); params.push(isActive ? 1 : 0); }
+  if (expiresAt !== undefined) { updates.push('expires_at = ?'); params.push(expiresAt); }
+
+  if (updates.length === 0) return false;
+
+  params.push(id);
+  const stmt = db.prepare(`UPDATE api_keys SET ${updates.join(', ')} WHERE id = ?`);
+  const result = stmt.run(...params);
+  return result.changes > 0;
+}
+
+/**
+ * Revoke (soft delete) an API key
+ */
+export async function revokeApiKey(id) {
+  const db = await getDb();
+  const stmt = db.prepare('UPDATE api_keys SET is_active = 0 WHERE id = ?');
+  const result = stmt.run(id);
+  return result.changes > 0;
+}
+
+/**
+ * Hard delete an API key
+ */
+export async function deleteApiKey(id) {
+  const db = await getDb();
+  const stmt = db.prepare('DELETE FROM api_keys WHERE id = ?');
+  const result = stmt.run(id);
+  return result.changes > 0;
+}
+
+// ============================================
+// Usage Tracking
+// ============================================
+
+/**
+ * Increment daily usage counter for an API key
+ */
+export async function incrementUsage(keyId) {
+  const db = await getDb();
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+  const stmt = db.prepare(`
+    INSERT INTO usage_daily (key_id, date, requests)
+    VALUES (?, ?, 1)
+    ON CONFLICT(key_id, date) DO UPDATE SET requests = requests + 1
+  `);
+  stmt.run(keyId, today);
+}
+
+/**
+ * Get today's usage for an API key
+ */
+export async function getTodayUsage(keyId) {
+  const db = await getDb();
+  const today = new Date().toISOString().split('T')[0];
+
+  const stmt = db.prepare('SELECT requests FROM usage_daily WHERE key_id = ? AND date = ?');
+  const row = stmt.get(keyId, today);
+  return row?.requests || 0;
+}
+
+/**
+ * Get usage history for an API key
+ */
+export async function getUsageHistory(keyId, days = 30) {
+  const db = await getDb();
+  const stmt = db.prepare(`
+    SELECT date, requests FROM usage_daily
+    WHERE key_id = ?
+    ORDER BY date DESC
+    LIMIT ?
+  `);
+  return stmt.all(keyId, days);
+}
+
+/**
+ * Get usage stats for all keys (admin dashboard)
+ */
+export async function getUsageStats(days = 7) {
+  const db = await getDb();
+  const stmt = db.prepare(`
+    SELECT
+      k.id, k.name, k.tier,
+      SUM(u.requests) as total_requests,
+      MAX(u.date) as last_active
+    FROM api_keys k
+    LEFT JOIN usage_daily u ON k.id = u.key_id
+      AND u.date >= date('now', '-' || ? || ' days')
+    WHERE k.is_active = 1
+    GROUP BY k.id
+    ORDER BY total_requests DESC
+  `);
+  return stmt.all(days);
+}
+
+/**
+ * Cleanup old usage data (older than 90 days)
+ */
+export async function cleanupUsageHistory(retentionDays = 90) {
+  const db = await getDb();
+  const stmt = db.prepare(`DELETE FROM usage_daily WHERE date < date('now', '-' || ? || ' days')`);
+  stmt.run(retentionDays);
+}
+
+// ============================================
+// Webhooks - Outbound notifications
+// ============================================
+
+const WEBHOOK_EVENTS = ['k_change', 'holder_new', 'holder_exit', 'threshold_alert'];
+
+/**
+ * Create a webhook subscription
+ */
+export async function createWebhookSubscription({ apiKeyId, url, events, secret }) {
+  const db = await getDb();
+  const id = randomUUID();
+
+  // Validate events
+  const validEvents = events.filter(e => WEBHOOK_EVENTS.includes(e));
+  if (validEvents.length === 0) {
+    throw new Error(`Invalid events. Valid: ${WEBHOOK_EVENTS.join(', ')}`);
+  }
+
+  const stmt = db.prepare(`
+    INSERT INTO webhook_subscriptions (id, api_key_id, url, events, secret)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  stmt.run(id, apiKeyId, url, JSON.stringify(validEvents), secret);
+
+  return { id, api_key_id: apiKeyId, url, events: validEvents };
+}
+
+/**
+ * Get webhook subscription by ID
+ */
+export async function getWebhookSubscription(id) {
+  const db = await getDb();
+  const stmt = db.prepare('SELECT * FROM webhook_subscriptions WHERE id = ?');
+  const row = stmt.get(id);
+  if (row) {
+    row.events = JSON.parse(row.events);
+  }
+  return row;
+}
+
+/**
+ * List webhook subscriptions for an API key
+ */
+export async function listWebhookSubscriptions(apiKeyId) {
+  const db = await getDb();
+  const stmt = db.prepare('SELECT * FROM webhook_subscriptions WHERE api_key_id = ? AND is_active = 1');
+  const rows = stmt.all(apiKeyId);
+  return rows.map(row => ({ ...row, events: JSON.parse(row.events) }));
+}
+
+/**
+ * List all active subscriptions for a specific event type
+ */
+export async function getSubscriptionsForEvent(eventType) {
+  const db = await getDb();
+  const stmt = db.prepare(`
+    SELECT * FROM webhook_subscriptions
+    WHERE is_active = 1 AND failure_count < 5
+  `);
+  const rows = stmt.all();
+
+  // Filter by event type (events is JSON array)
+  return rows.filter(row => {
+    const events = JSON.parse(row.events);
+    return events.includes(eventType);
+  }).map(row => ({ ...row, events: JSON.parse(row.events) }));
+}
+
+/**
+ * Update webhook subscription
+ */
+export async function updateWebhookSubscription(id, { url, events, isActive }) {
+  const db = await getDb();
+
+  const updates = [];
+  const params = [];
+
+  if (url !== undefined) { updates.push('url = ?'); params.push(url); }
+  if (events !== undefined) {
+    const validEvents = events.filter(e => WEBHOOK_EVENTS.includes(e));
+    updates.push('events = ?');
+    params.push(JSON.stringify(validEvents));
+  }
+  if (isActive !== undefined) { updates.push('is_active = ?'); params.push(isActive ? 1 : 0); }
+
+  if (updates.length === 0) return false;
+
+  params.push(id);
+  const stmt = db.prepare(`UPDATE webhook_subscriptions SET ${updates.join(', ')} WHERE id = ?`);
+  const result = stmt.run(...params);
+  return result.changes > 0;
+}
+
+/**
+ * Delete webhook subscription
+ */
+export async function deleteWebhookSubscription(id) {
+  const db = await getDb();
+  const stmt = db.prepare('DELETE FROM webhook_subscriptions WHERE id = ?');
+  const result = stmt.run(id);
+  return result.changes > 0;
+}
+
+/**
+ * Record webhook delivery attempt
+ */
+export async function createWebhookDelivery({ subscriptionId, eventType, payload }) {
+  const db = await getDb();
+  const stmt = db.prepare(`
+    INSERT INTO webhook_deliveries (subscription_id, event_type, payload, status)
+    VALUES (?, ?, ?, 'pending')
+  `);
+  const result = stmt.run(subscriptionId, eventType, JSON.stringify(payload));
+  return result.lastInsertRowid;
+}
+
+/**
+ * Get pending webhook deliveries ready for retry
+ */
+export async function getPendingWebhookDeliveries(limit = 10) {
+  const db = await getDb();
+  const now = Math.floor(Date.now() / 1000);
+
+  const stmt = db.prepare(`
+    SELECT d.*, s.url, s.secret
+    FROM webhook_deliveries d
+    JOIN webhook_subscriptions s ON d.subscription_id = s.id
+    WHERE d.status = 'pending'
+      AND (d.next_retry_at IS NULL OR d.next_retry_at <= ?)
+      AND d.attempts < 3
+    ORDER BY d.created_at ASC
+    LIMIT ?
+  `);
+  return stmt.all(now, limit);
+}
+
+/**
+ * Update webhook delivery status
+ */
+export async function updateWebhookDelivery(id, { status, responseCode, responseBody, nextRetryAt }) {
+  const db = await getDb();
+  const now = Math.floor(Date.now() / 1000);
+
+  const stmt = db.prepare(`
+    UPDATE webhook_deliveries SET
+      status = ?,
+      attempts = attempts + 1,
+      response_code = ?,
+      response_body = ?,
+      next_retry_at = ?,
+      completed_at = CASE WHEN ? IN ('success', 'failed') THEN ? ELSE NULL END
+    WHERE id = ?
+  `);
+  stmt.run(status, responseCode, responseBody, nextRetryAt, status, now, id);
+}
+
+/**
+ * Mark subscription as failed (too many failures)
+ */
+export async function incrementWebhookFailure(subscriptionId) {
+  const db = await getDb();
+  const stmt = db.prepare(`
+    UPDATE webhook_subscriptions SET
+      failure_count = failure_count + 1,
+      is_active = CASE WHEN failure_count >= 4 THEN 0 ELSE is_active END
+    WHERE id = ?
+  `);
+  stmt.run(subscriptionId);
+}
+
+/**
+ * Reset failure count on successful delivery
+ */
+export async function resetWebhookFailure(subscriptionId) {
+  const db = await getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const stmt = db.prepare(`
+    UPDATE webhook_subscriptions SET failure_count = 0, last_triggered_at = ? WHERE id = ?
+  `);
+  stmt.run(now, subscriptionId);
+}
+
+/**
+ * Get webhook delivery history for a subscription
+ */
+export async function getWebhookDeliveryHistory(subscriptionId, limit = 50) {
+  const db = await getDb();
+  const stmt = db.prepare(`
+    SELECT * FROM webhook_deliveries
+    WHERE subscription_id = ?
+    ORDER BY created_at DESC
+    LIMIT ?
+  `);
+  return stmt.all(subscriptionId, limit);
+}
+
+/**
+ * Get available webhook event types
+ */
+export function getWebhookEventTypes() {
+  return [...WEBHOOK_EVENTS];
+}
+
+// ============================================
+// Filtered Queries for API v2
+// ============================================
+
+/**
+ * Get holders filtered by K_wallet and classification
+ * Used by GET /api/v1/holders
+ */
+export async function getHoldersFiltered({ kMin, classification, limit = 100, minBalance } = {}) {
+  const db = await getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const minBal = minBalance || parseInt(process.env.MIN_BALANCE || '1000');
+
+  let sql = `
+    SELECT
+      address,
+      current_balance,
+      first_buy_amount,
+      first_buy_ts,
+      k_wallet,
+      k_wallet_tokens,
+      total_sent
+    FROM wallets
+    WHERE CAST(current_balance AS INTEGER) >= ?
+  `;
+  const params = [minBal];
+
+  if (kMin !== undefined && kMin !== null) {
+    sql += ' AND k_wallet >= ?';
+    params.push(kMin);
+  }
+
+  sql += ' ORDER BY CAST(current_balance AS INTEGER) DESC LIMIT ?';
+  params.push(limit);
+
+  const stmt = db.prepare(sql);
+  const rows = stmt.all(...params);
+
+  // Calculate retention and classification for each
+  return rows.map(row => {
+    const currentBalance = BigInt(row.current_balance || '0');
+    const firstBuyAmount = BigInt(row.first_buy_amount || '0');
+    const retention = firstBuyAmount > 0n
+      ? Number(currentBalance) / Number(firstBuyAmount)
+      : 1.0;
+    const walletClass = classifyWalletK(retention);
+
+    // Filter by classification if specified
+    if (classification && walletClass !== classification) {
+      return null;
+    }
+
+    const holdDays = row.first_buy_ts
+      ? Math.floor((now - row.first_buy_ts) / 86400)
+      : 0;
+
+    return {
+      address: row.address,
+      balance: row.current_balance,
+      first_buy_amount: row.first_buy_amount,
+      retention: Math.round(retention * 1000) / 1000,
+      classification: walletClass,
+      k_wallet: row.k_wallet,
+      k_wallet_tokens: row.k_wallet_tokens,
+      never_sold: row.total_sent === '0',
+      hold_days: holdDays,
+    };
+  }).filter(Boolean); // Remove nulls from classification filter
+}
+
 export default {
   getDb,
   upsertWallet,
@@ -842,4 +1408,34 @@ export default {
   failToken,
   getTokenQueueStats,
   cleanupTokenQueue,
+  // API Keys & Multi-Tenant (API v2)
+  createApiKey,
+  validateApiKey,
+  getApiKey,
+  listApiKeys,
+  updateApiKey,
+  revokeApiKey,
+  deleteApiKey,
+  // Usage tracking
+  incrementUsage,
+  getTodayUsage,
+  getUsageHistory,
+  getUsageStats,
+  cleanupUsageHistory,
+  // Filtered queries
+  getHoldersFiltered,
+  // Webhooks
+  createWebhookSubscription,
+  getWebhookSubscription,
+  listWebhookSubscriptions,
+  getSubscriptionsForEvent,
+  updateWebhookSubscription,
+  deleteWebhookSubscription,
+  createWebhookDelivery,
+  getPendingWebhookDeliveries,
+  updateWebhookDelivery,
+  incrementWebhookFailure,
+  resetWebhookFailure,
+  getWebhookDeliveryHistory,
+  getWebhookEventTypes,
 };
