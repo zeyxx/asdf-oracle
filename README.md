@@ -60,7 +60,24 @@ Server runs at `http://localhost:3001`
 | POST | `/api/v1/tokens` | Bulk token lookup | 50 |
 | GET | `/api/v1/holders` | Filter holders by K score | - |
 
-### Webhooks
+### WebSocket (Real-time)
+
+```javascript
+const ws = new WebSocket('ws://localhost:3001/ws?key=YOUR_API_KEY');
+ws.onmessage = (e) => {
+  const { event, data, ts } = JSON.parse(e.data);
+  // event: 'k' | 'holder:new' | 'holder:exit' | 'tx'
+};
+```
+
+| Event | Payload | Trigger |
+|-------|---------|---------|
+| `k` | `{k, holders, delta}` | K change >= 1% |
+| `holder:new` | `{address, balance}` | New holder |
+| `holder:exit` | `{address}` | Holder exits |
+| `tx` | `{signature, wallet, amount}` | Transaction |
+
+### Webhooks (HTTP)
 
 Subscribe to events: `k_change`, `holder_new`, `holder_exit`, `threshold_alert`
 
@@ -132,13 +149,21 @@ ADMIN_KEY=your_admin_key
 ## Architecture
 
 ```
-Helius ──webhook──▶ server ──▶ SQLite (PoH ordered)
+Helius ──webhook──▶ server ──▶ SQLite (WAL mode)
            │           │
-       polling         ├──▶ K calculator
-       fallback        ├──▶ Wallet scorer (queue)
+       polling         ├──▶ LRU Cache (K, API keys, wallets)
+       fallback        ├──▶ K calculator
+                       ├──▶ Wallet scorer (queue)
                        ├──▶ Token scorer (queue)
+                       ├──▶ WebSocket broadcaster
                        └──▶ Webhook dispatcher
 ```
+
+**Performance (10k+ users)**
+- SQLite WAL + 64MB cache + mmap
+- LRU caching (K: 30s, API keys: 5min, wallets: 1h)
+- Async static file I/O
+- Native WebSocket (RFC 6455)
 
 No external dependencies. Native Node.js 22 + SQLite.
 
