@@ -198,6 +198,21 @@ async function main() {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-XSS-Protection', '1; mode=block');
 
+    // HTTPS enforcement in production (behind reverse proxy)
+    const isProduction = process.env.NODE_ENV === 'production';
+    const proto = req.headers['x-forwarded-proto'];
+    if (isProduction && proto && proto !== 'https') {
+      const host = req.headers['x-forwarded-host'] || req.headers.host;
+      res.writeHead(301, { Location: `https://${host}${req.url}` });
+      res.end();
+      return;
+    }
+
+    // HSTS header in production (1 year)
+    if (isProduction) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+
     // CORS headers - restrict to allowed origins
     const origin = req.headers.origin;
     if (origin && isOriginAllowed(origin)) {

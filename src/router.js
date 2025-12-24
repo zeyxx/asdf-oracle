@@ -9,9 +9,19 @@
  * - api-v1.js: /api/v1/* (external Oracle API)
  * - webhooks.js: /api/v1/webhooks/* (webhook subscriptions)
  * - admin.js: /k-metric/admin/* (administrative endpoints)
+ *
+ * Security:
+ * - MAX_BODY_SIZE prevents memory exhaustion attacks
+ * - Content-Length validation before reading body
+ * - Body read timeout prevents slowloris attacks
  */
 
 import { loadEnv } from './utils.js';
+
+// Security: Maximum body size (1MB)
+const MAX_BODY_SIZE = 1024 * 1024;
+// Security: Body read timeout (30 seconds)
+const BODY_READ_TIMEOUT = 30000;
 loadEnv();
 
 // Import route modules
@@ -45,6 +55,52 @@ function sendJson(res, status, data) {
 }
 
 /**
+ * Read request body with security limits
+ * - Uses Buffer concatenation (O(n) vs O(n²) string concat)
+ * - Enforces MAX_BODY_SIZE during read
+ * - Times out after BODY_READ_TIMEOUT
+ */
+async function readBodyWithLimits(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+
+    // Security: Timeout for slow clients (slowloris prevention)
+    const timeout = setTimeout(() => {
+      req.destroy();
+      reject(new Error('BODY_READ_TIMEOUT'));
+    }, BODY_READ_TIMEOUT);
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      // Security: Reject if body exceeds limit during read
+      if (size > MAX_BODY_SIZE) {
+        clearTimeout(timeout);
+        req.destroy();
+        reject(new Error('PAYLOAD_TOO_LARGE'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      clearTimeout(timeout);
+      try {
+        const body = Buffer.concat(chunks).toString('utf8');
+        resolve(body ? JSON.parse(body) : {});
+      } catch {
+        resolve({});
+      }
+    });
+
+    req.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+}
+
+/**
  * Handle incoming request
  */
 export async function handleRequest(req, res) {
@@ -65,13 +121,25 @@ export async function handleRequest(req, res) {
     if (handler) {
       // Parse JSON body for POST/DELETE requests
       if ((method === 'POST' || method === 'DELETE') && !req.body) {
-        let body = '';
-        for await (const chunk of req) {
-          body += chunk;
+        // Security: Check Content-Length before reading
+        const contentLength = parseInt(req.headers['content-length'] || '0', 10);
+        if (contentLength > MAX_BODY_SIZE) {
+          sendJson(res, 413, { error: 'Payload too large', max: MAX_BODY_SIZE });
+          return;
         }
+
+        // Security: Read body with size limit and timeout
         try {
-          req.body = JSON.parse(body);
-        } catch {
+          req.body = await readBodyWithLimits(req);
+        } catch (err) {
+          if (err.message === 'PAYLOAD_TOO_LARGE') {
+            sendJson(res, 413, { error: 'Payload too large', max: MAX_BODY_SIZE });
+            return;
+          }
+          if (err.message === 'BODY_READ_TIMEOUT') {
+            sendJson(res, 408, { error: 'Request timeout' });
+            return;
+          }
           req.body = {};
         }
       }

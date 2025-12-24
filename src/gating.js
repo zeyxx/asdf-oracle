@@ -15,6 +15,7 @@
  * - Fallback verification via Helius RPC
  */
 
+import { timingSafeEqual } from 'crypto';
 import db from './db.js';
 import helius from './helius.js';
 import { log } from './utils.js';
@@ -35,6 +36,7 @@ function getConfig() {
 
 /**
  * Verify admin API key for bypass mode
+ * Uses crypto.timingSafeEqual to prevent timing attacks
  * @param {string} apiKey - The API key from request header
  * @returns {boolean}
  */
@@ -43,17 +45,18 @@ export function verifyAdminKey(apiKey) {
   if (!config.adminKey) return false;
   if (!apiKey) return false;
 
-  // Constant-time comparison to prevent timing attacks
-  const keyBuffer = Buffer.from(config.adminKey);
-  const inputBuffer = Buffer.from(apiKey);
+  // Constant-time comparison using Node.js crypto (standard pattern)
+  const keyBuffer = Buffer.from(config.adminKey, 'utf8');
+  const inputBuffer = Buffer.from(apiKey, 'utf8');
 
-  if (keyBuffer.length !== inputBuffer.length) return false;
-
-  let result = 0;
-  for (let i = 0; i < keyBuffer.length; i++) {
-    result |= keyBuffer[i] ^ inputBuffer[i];
+  // Length check must be done, but pad to same length to avoid timing leak
+  if (keyBuffer.length !== inputBuffer.length) {
+    // Compare with dummy to maintain constant time
+    timingSafeEqual(keyBuffer, keyBuffer);
+    return false;
   }
-  return result === 0;
+
+  return timingSafeEqual(keyBuffer, inputBuffer);
 }
 
 /**
