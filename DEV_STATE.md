@@ -2,101 +2,130 @@
 
 ## Status: OPERATIONAL
 
-**Version:** API v2
+**Version:** API v2 + WebSocket
 **Sync Mode:** Hybrid (webhook + 5min polling fallback)
-**Database:** SQLite with automated backups (6h)
+**Database:** SQLite WAL mode + LRU caching
+**Capacity:** 10k+ concurrent users
 
-### Live Stats
-| Metric | Value |
-|--------|-------|
-| K Score | 87% |
-| Holders | 408 |
-| Transactions | 64,090 |
-| Snapshots | 47 |
+---
+
+## Architecture
+
+```
+Helius ──webhook──▶ server ──▶ SQLite (WAL mode)
+           │           │
+       polling         ├──▶ LRU Cache (K, API keys, wallets)
+       fallback        ├──▶ K calculator
+                       ├──▶ Wallet scorer (queue)
+                       ├──▶ Token scorer (queue)
+                       ├──▶ WebSocket broadcaster
+                       └──▶ Webhook dispatcher
+```
+
+```
+src/
+├── server.js          HTTP server, CORS, WebSocket upgrade
+├── router.js          API route aggregator
+├── routes/            Modular handlers (dashboard, api-v1, admin, webhooks)
+├── db/                Modular DB (connection, wallets, transactions, api-keys)
+├── ws.js              Native WebSocket (RFC 6455)
+├── cache.js           LRU cache layer
+├── sync.js            Hybrid sync (webhook + polling)
+├── calculator.js      K-metric calculation
+├── wallet-score.js    K_wallet background queue
+├── token-score.js     Token K scoring
+├── webhooks.js        Outbound webhook dispatcher
+├── security.js        Rate limiting, validation, backups
+└── gating.js          Token-gated access control
+```
+
+---
+
+## Performance
+
+| Layer | Optimization |
+|-------|--------------|
+| SQLite | WAL mode + 64MB cache + 256MB mmap |
+| K-metric | 30s cache TTL |
+| API keys | 5min cache TTL |
+| Wallets | 1h cache TTL |
+| Static files | Async I/O + 5min cache |
+| WebSocket | Native RFC 6455, 5 conn/key |
 
 ---
 
 ## API Reference
 
-### Dashboard API (`/k-metric`)
+### Dashboard (`/k-metric`)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/k-metric` | Current K score + holder breakdown |
+| GET | `/k-metric` | Current K + holder breakdown |
 | GET | `/k-metric/history` | Historical snapshots |
 | GET | `/k-metric/holders` | All holders with classifications |
-| GET | `/k-metric/status` | Sync status + queue health |
-| GET | `/k-metric/wallet/:addr/k-score` | Wallet K for primary token |
-| GET | `/k-metric/wallet/:addr/k-global` | Wallet K across all tokens |
+| GET | `/k-metric/status` | Sync + queue + cache stats |
+| GET | `/k-metric/wallet/:addr/k-score` | Wallet K (this token) |
+| GET | `/k-metric/wallet/:addr/k-global` | Wallet K (all tokens) |
 | POST | `/k-metric/webhook` | Helius webhook receiver |
 
-### Oracle API v1 (`/api/v1`)
+### Oracle API (`/api/v1`)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/status` | Oracle status |
-| GET | `/api/v1/token/:mint` | K score for any PumpFun token |
+| GET | `/api/v1/token/:mint` | Token K score |
 | GET | `/api/v1/wallet/:addr` | Wallet scores |
-| POST | `/api/v1/wallets` | Batch wallet lookup (max 100) |
-| POST | `/api/v1/tokens` | Batch token lookup (max 50) |
-| GET | `/api/v1/holders` | Filtered holders by K score |
+| POST | `/api/v1/wallets` | Batch wallets (max 100) |
+| POST | `/api/v1/tokens` | Batch tokens (max 50) |
+| GET | `/api/v1/holders` | Filtered by K score |
+
+### WebSocket (`/ws`)
+
+```javascript
+const ws = new WebSocket('ws://host/ws?key=API_KEY');
+ws.onmessage = (e) => {
+  const { event, data, ts } = JSON.parse(e.data);
+};
+```
+
+| Event | Payload | Trigger |
+|-------|---------|---------|
+| `k` | `{k, holders, delta}` | K change >= 1% |
+| `holder:new` | `{address, balance}` | New holder |
+| `holder:exit` | `{address}` | Holder exits |
+| `tx` | `{signature, wallet, amount}` | Transaction |
 
 ### Webhooks (`/api/v1/webhooks`)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/webhooks/events` | List available events |
+| GET | `/api/v1/webhooks/events` | List events |
 | GET | `/api/v1/webhooks` | List subscriptions |
 | POST | `/api/v1/webhooks` | Create subscription |
-| DELETE | `/api/v1/webhooks/:id` | Delete subscription |
-| GET | `/api/v1/webhooks/:id/deliveries` | Delivery history |
+| DELETE | `/api/v1/webhooks/:id` | Delete |
 
 **Events:** `k_change`, `holder_new`, `holder_exit`, `threshold_alert`
 
 ---
 
-## Authentication
+## Rate Limits
 
-### API Keys
-Header: `X-Oracle-Key: <key>`
-
-| Tier | Requests/min | Requests/day |
-|------|--------------|--------------|
-| public | 100 | 10,000 |
-| free | 500 | 50,000 |
-| standard | 1,000 | 100,000 |
-| premium | 5,000 | 500,000 |
+| Tier | /min | /day |
+|------|------|------|
+| public | 100 | 10k |
+| free | 500 | 50k |
+| standard | 1k | 100k |
+| premium | 5k | 500k |
 | internal | unlimited | unlimited |
 
-### Webhook Security
-- HMAC-SHA256 signature in `X-Oracle-Signature` header
-- Exponential backoff retry (1m, 5m, 15m)
-- Auto-disable after 5 consecutive failures
+Header: `X-Oracle-Key: <key>`
 
 ---
 
 ## Commands
+
 ```bash
-npm start        # Run server
-npm run dev      # Development mode (--watch)
-npm run backfill # Initial sync from Helius
-```
-
----
-
-## Architecture
-```
-src/
-├── server.js       HTTP server, CORS, rate limiting
-├── router.js       API route handlers
-├── sync.js         Hybrid sync (webhook + polling)
-├── webhook.js      Helius webhook processor
-├── calculator.js   K-metric calculation
-├── wallet-score.js K_wallet background queue
-├── token-score.js  Token K scoring
-├── webhooks.js     Outbound webhook dispatcher
-├── security.js     Rate limiting, validation
-├── gating.js       Token-gated access control
-├── db.js           SQLite persistence
-└── utils.js        Logging, env loading
+npm start        # Run server (port 3001)
+npm run dev      # Development (--watch)
+npm run backfill # Initial sync
 ```
