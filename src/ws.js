@@ -414,8 +414,19 @@ function startHeartbeat() {
       // Check for timeout
       if (now - meta.lastPong > HEARTBEAT_TIMEOUT) {
         log('WARN', `[WS] Client timeout: ${meta.name || 'unnamed'}`);
-        socket.destroy();
-        handleClose(socket);
+        // RFC 6455: Send close frame before destroying
+        try {
+          const frame = encodeFrame('', OPCODE.CLOSE);
+          socket.write(frame);
+          // Give client 100ms to receive close frame
+          setTimeout(() => {
+            socket.destroy();
+            handleClose(socket);
+          }, 100);
+        } catch {
+          socket.destroy();
+          handleClose(socket);
+        }
         continue;
       }
 

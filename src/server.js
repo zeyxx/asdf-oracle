@@ -12,6 +12,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { loadEnv, log } from './utils.js';
 import router from './router.js';
 import db from './db.js';
@@ -193,6 +194,11 @@ async function main() {
 
   // Create server
   const server = http.createServer(async (req, res) => {
+    // Request correlation ID (for tracing/debugging)
+    const requestId = req.headers['x-request-id'] || randomUUID();
+    req.requestId = requestId;
+    res.setHeader('X-Request-ID', requestId);
+
     // Security headers
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -277,11 +283,11 @@ async function main() {
 
     // API routes (/k-metric for dashboard, /api/v1 for external services)
     if (url.pathname.startsWith('/k-metric') || url.pathname.startsWith('/api/v1')) {
-      log('INFO', `${req.method} ${req.url}`);
+      log('INFO', `[${requestId.slice(0, 8)}] ${req.method} ${req.url}`);
       try {
         await router.handleRequest(req, res);
       } catch (error) {
-        log('ERROR', `Request error: ${error.message}`);
+        log('ERROR', `[${requestId.slice(0, 8)}] Request error: ${error.message}`);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Internal server error' }));
       }
