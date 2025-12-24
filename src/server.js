@@ -66,10 +66,15 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon',
 };
 
+// Static file cache (LRU with 50 files max, 5 min TTL)
+const staticFileCache = new Map();
+const STATIC_CACHE_MAX_SIZE = 50;
+const STATIC_CACHE_TTL = 5 * 60 * 1000;
+
 /**
- * Serve static files
+ * Serve static files with caching and async I/O
  */
-function serveStatic(req, res) {
+async function serveStatic(req, res) {
   let filePath = req.url === '/' ? '/index.html' : req.url;
 
   // Clean routes (remove query params)
@@ -84,18 +89,45 @@ function serveStatic(req, res) {
   filePath = path.normalize(filePath).replace(/^(\.\.[\/\\])+/, '');
 
   const fullPath = path.join(ROOT_DIR, filePath);
-
-  // Check if file exists
-  if (!fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
-    return false;
-  }
-
   const ext = path.extname(fullPath);
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
+  // Check cache first
+  const cached = staticFileCache.get(fullPath);
+  if (cached && Date.now() < cached.expiresAt) {
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=300',
+      'X-Cache': 'HIT',
+    });
+    res.end(cached.content);
+    return true;
+  }
+
+  // Async file read
   try {
-    const content = fs.readFileSync(fullPath);
-    res.writeHead(200, { 'Content-Type': contentType });
+    const stat = await fs.promises.stat(fullPath);
+    if (stat.isDirectory()) {
+      return false;
+    }
+
+    const content = await fs.promises.readFile(fullPath);
+
+    // Cache the file (LRU eviction)
+    if (staticFileCache.size >= STATIC_CACHE_MAX_SIZE) {
+      const oldestKey = staticFileCache.keys().next().value;
+      staticFileCache.delete(oldestKey);
+    }
+    staticFileCache.set(fullPath, {
+      content,
+      expiresAt: Date.now() + STATIC_CACHE_TTL,
+    });
+
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=300',
+      'X-Cache': 'MISS',
+    });
     res.end(content);
     return true;
   } catch (error) {
@@ -242,7 +274,7 @@ async function main() {
     }
 
     // Static files
-    if (serveStatic(req, res)) {
+    if (await serveStatic(req, res)) {
       return;
     }
 

@@ -13,24 +13,36 @@ import sync from '../sync.js';
 import walletScore from '../wallet-score.js';
 import gating from '../gating.js';
 import security from '../security.js';
+import { kMetricCache, getOrCompute, getAllCacheStats } from '../cache.js';
 import { log } from '../utils.js';
 import { sendJson } from './utils.js';
+import ws from '../ws.js';
 
 const MAINTENANCE_MODE = process.env.MAINTENANCE === '1' || process.env.MAINTENANCE === 'true';
 
 /**
  * GET /k-metric - Get current K-metric
+ * Cached for 30 seconds to handle high request volume
  */
 async function handleGetKMetric(req, res) {
   try {
-    const data = await calculator.calculate();
+    // Use cache-through pattern for K-metric
+    const data = await getOrCompute(
+      kMetricCache,
+      'k-metric-current',
+      async () => {
+        const calculated = await calculator.calculate();
+        if (!calculated) return null;
+        const tokenInfo = await helius.fetchTokenInfo();
+        calculated.token = tokenInfo;
+        return calculated;
+      },
+      30 * 1000 // 30 second TTL
+    );
 
     if (!data) {
       return sendJson(res, 503, { error: 'No data available. Run backfill first.' });
     }
-
-    const tokenInfo = await helius.fetchTokenInfo();
-    data.token = tokenInfo;
 
     sendJson(res, 200, data);
   } catch (error) {
@@ -168,13 +180,14 @@ async function handleGetStats(req, res) {
 }
 
 /**
- * GET /k-metric/status - Get sync status
+ * GET /k-metric/status - Get sync status and system health
  */
 async function handleGetStatus(req, res) {
   try {
     const status = await sync.getStatus();
     const kMetric = await calculator.calculate();
     const gatingStatus = gating.getGatingStatus();
+    const cacheStats = getAllCacheStats();
 
     sendJson(res, 200, {
       sync: status,
@@ -184,7 +197,15 @@ async function handleGetStatus(req, res) {
       description: 'Webhook (real-time) + Polling (5min fallback)',
       gating: gatingStatus,
       queue: walletScore.getQueueStats(),
+      cache: cacheStats,
+      websocket: ws.getStats(),
       maintenance: MAINTENANCE_MODE,
+      uptime: Math.floor(process.uptime()),
+      memory: {
+        heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+        rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
+      },
     });
   } catch (error) {
     log('ERROR', `Status error: ${error.message}`);

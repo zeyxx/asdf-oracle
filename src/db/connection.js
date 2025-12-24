@@ -22,7 +22,7 @@ if (!existsSync(DATA_DIR)) {
 let db = null;
 
 /**
- * Initialize database connection
+ * Initialize database connection with performance optimizations
  */
 export async function initDb() {
   if (db) return db;
@@ -45,9 +45,48 @@ export async function initDb() {
     }
   }
 
+  // Apply performance optimizations
+  applyOptimizations();
+
   // Run migrations
   migrate();
   return db;
+}
+
+/**
+ * Apply SQLite performance optimizations for high concurrency
+ */
+function applyOptimizations() {
+  const optimizations = [
+    // WAL mode: allows concurrent reads during writes
+    'PRAGMA journal_mode = WAL',
+    // Busy timeout: wait up to 5 seconds for locks
+    'PRAGMA busy_timeout = 5000',
+    // Synchronous NORMAL: good balance of safety and speed
+    'PRAGMA synchronous = NORMAL',
+    // Memory-mapped I/O: faster reads (256MB)
+    'PRAGMA mmap_size = 268435456',
+    // Cache size: 64MB in memory
+    'PRAGMA cache_size = -64000',
+    // Temp store in memory
+    'PRAGMA temp_store = MEMORY',
+    // Enable foreign keys
+    'PRAGMA foreign_keys = ON',
+  ];
+
+  for (const pragma of optimizations) {
+    try {
+      if (db.exec) {
+        db.exec(pragma);
+      } else if (db.run) {
+        db.run(pragma);
+      }
+    } catch (e) {
+      console.warn(`[DB] Pragma failed: ${pragma} - ${e.message}`);
+    }
+  }
+
+  console.log('[DB] Performance optimizations applied (WAL mode, 64MB cache)');
 }
 
 /**

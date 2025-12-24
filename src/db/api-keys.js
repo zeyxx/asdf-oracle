@@ -2,10 +2,12 @@
  * API Keys & Usage Tracking Database Operations
  *
  * Multi-tenant API key management with rate limiting.
+ * Uses LRU cache to reduce DB lookups.
  */
 
 import { createHash, randomUUID } from 'crypto';
 import { getDb } from './connection.js';
+import { apiKeyCache } from '../cache.js';
 
 /**
  * Hash an API key using SHA256
@@ -59,12 +61,20 @@ export async function createApiKey({ name, tier = 'standard', rateLimitMinute, r
 
 /**
  * Validate an API key and return its metadata
+ * Uses LRU cache to reduce DB lookups (5 min TTL)
  */
 export async function validateApiKey(key) {
   if (!key) return null;
 
-  const db = await getDb();
   const keyHash = hashApiKey(key);
+
+  // Check cache first
+  const cached = apiKeyCache.get(keyHash);
+  if (cached !== undefined) {
+    return cached; // Returns null for invalid keys too
+  }
+
+  const db = await getDb();
   const now = Math.floor(Date.now() / 1000);
 
   const stmt = db.prepare(`
@@ -74,12 +84,32 @@ export async function validateApiKey(key) {
   `);
   const row = stmt.get(keyHash, now);
 
+  // Cache the result (including null for invalid keys)
+  apiKeyCache.set(keyHash, row || null);
+
+  // Update last_used_at asynchronously (don't block response)
   if (row) {
-    const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
-    updateStmt.run(now, row.id);
+    setImmediate(async () => {
+      try {
+        const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
+        updateStmt.run(now, row.id);
+      } catch (e) {
+        // Ignore update errors
+      }
+    });
   }
 
   return row || null;
+}
+
+/**
+ * Invalidate API key cache (call after updates)
+ */
+export function invalidateApiKeyCache(key) {
+  if (key) {
+    const keyHash = hashApiKey(key);
+    apiKeyCache.delete(keyHash);
+  }
 }
 
 /**
