@@ -16,8 +16,9 @@ loadEnv();
 
 const MIN_BALANCE_FALLBACK = parseInt(process.env.MIN_BALANCE || '1000');
 
-// Track last K for change detection
+// Track last K for change detection (protected by mutex)
 let lastK = null;
+let calculationInProgress = false;
 const TOKEN_LAUNCH_TS = parseInt(process.env.TOKEN_LAUNCH_TS || '0');
 const OG_EARLY_WINDOW = parseInt(process.env.OG_EARLY_WINDOW || '21') * 86400; // days to seconds
 const OG_HOLD_THRESHOLD = parseInt(process.env.OG_HOLD_THRESHOLD || '55') * 86400; // days to seconds
@@ -139,39 +140,51 @@ export async function calculate() {
 /**
  * Calculate and save a snapshot
  * Triggers k_change webhook if K changes significantly
+ * Protected by mutex to prevent race conditions on lastK
  */
 export async function calculateAndSave() {
-  const data = await calculate();
-  if (data) {
-    await db.saveSnapshot(data);
-    log('INFO', 'Snapshot saved');
-
-    // Trigger k_change webhook and WebSocket broadcast if delta > 1%
-    if (lastK !== null) {
-      const delta = data.k - lastK;
-      if (Math.abs(delta) >= 1) {
-        const changeData = {
-          previousK: lastK,
-          newK: data.k,
-          delta,
-          holders: data.holders,
-        };
-        // HTTP webhook
-        webhooks.triggerKChange(changeData)
-          .catch(err => log('ERROR', `[Webhook] k_change trigger failed: ${err.message}`));
-        // WebSocket broadcast
-        ws.broadcast('k', {
-          k: data.k,
-          holders: data.holders,
-          delta,
-          accumulators: data.accumulators,
-          maintained: data.maintained,
-        });
-      }
-    }
-    lastK = data.k;
+  // Prevent concurrent calculations (race condition on lastK)
+  if (calculationInProgress) {
+    log('DEBUG', 'Calculation already in progress, skipping');
+    return null;
   }
-  return data;
+
+  calculationInProgress = true;
+  try {
+    const data = await calculate();
+    if (data) {
+      await db.saveSnapshot(data);
+      log('INFO', 'Snapshot saved');
+
+      // Trigger k_change webhook and WebSocket broadcast if delta > 1%
+      if (lastK !== null) {
+        const delta = data.k - lastK;
+        if (Math.abs(delta) >= 1) {
+          const changeData = {
+            previousK: lastK,
+            newK: data.k,
+            delta,
+            holders: data.holders,
+          };
+          // HTTP webhook
+          webhooks.triggerKChange(changeData)
+            .catch(err => log('ERROR', `[Webhook] k_change trigger failed: ${err.message}`));
+          // WebSocket broadcast
+          ws.broadcast('k', {
+            k: data.k,
+            holders: data.holders,
+            delta,
+            accumulators: data.accumulators,
+            maintained: data.maintained,
+          });
+        }
+      }
+      lastK = data.k;
+    }
+    return data;
+  } finally {
+    calculationInProgress = false;
+  }
 }
 
 /**

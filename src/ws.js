@@ -122,15 +122,31 @@ export async function handleUpgrade(req, socket, head) {
     events: ['k', 'holder:new', 'holder:exit', 'tx', 'status'],
   });
 
+  // Create bound handlers for cleanup
+  const onData = (data) => handleData(socket, data);
+  const onClose = () => {
+    cleanup();
+    handleClose(socket);
+  };
+  const onError = (err) => {
+    log('ERROR', `[WS] Socket error: ${err.message}`);
+    cleanup();
+    handleClose(socket);
+  };
+
+  // Cleanup function to remove listeners
+  const cleanup = () => {
+    socket.removeListener('data', onData);
+    socket.removeListener('close', onClose);
+    socket.removeListener('error', onError);
+  };
+
   // Handle incoming data
-  socket.on('data', (data) => handleData(socket, data));
+  socket.on('data', onData);
 
   // Handle disconnect
-  socket.on('close', () => handleClose(socket));
-  socket.on('error', (err) => {
-    log('ERROR', `[WS] Socket error: ${err.message}`);
-    handleClose(socket);
-  });
+  socket.on('close', onClose);
+  socket.on('error', onError);
 
   // Start heartbeat if not running
   startHeartbeat();

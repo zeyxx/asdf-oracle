@@ -48,6 +48,31 @@ const KNOWN_POOL_WALLETS = new Set([
 // Cache for pool detection results (address -> {isPool, owner, checkedAt})
 const poolCache = new Map();
 const POOL_CACHE_TTL = 3600000; // 1 hour
+const POOL_CACHE_MAX_SIZE = 10000; // Max entries to prevent unbounded growth
+
+// Cleanup stale pool cache entries every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  let deleted = 0;
+  for (const [key, value] of poolCache.entries()) {
+    if (now - value.checkedAt > POOL_CACHE_TTL) {
+      poolCache.delete(key);
+      deleted++;
+    }
+  }
+  // If still over limit, remove oldest entries
+  if (poolCache.size > POOL_CACHE_MAX_SIZE) {
+    const entries = [...poolCache.entries()].sort((a, b) => a[1].checkedAt - b[1].checkedAt);
+    const toDelete = entries.slice(0, poolCache.size - POOL_CACHE_MAX_SIZE);
+    for (const [key] of toDelete) {
+      poolCache.delete(key);
+      deleted++;
+    }
+  }
+  if (deleted > 0) {
+    console.log(`[Helius] Pool cache cleanup: removed ${deleted} entries, ${poolCache.size} remaining`);
+  }
+}, 10 * 60 * 1000);
 
 // Cache for token info (price, supply, etc.) - avoids 3 external API calls per request
 let tokenInfoCache = { data: null, ts: 0 };

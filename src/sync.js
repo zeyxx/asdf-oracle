@@ -85,7 +85,7 @@ export async function syncHolderDelta() {
     await db.setSyncState('token_price', price.toString());
 
     // 7. Recalculate K with updated holders
-    calculator.calculate();
+    await calculator.calculate();
 
     return {
       added: missing.length,
