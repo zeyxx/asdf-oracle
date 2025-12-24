@@ -1,128 +1,152 @@
-# asdf-oracle 🔥
+# asdf-oracle
 
-**K-Metric Dashboard** — Holder conviction, measured on-chain.
+On-chain conviction scoring API for Solana tokens.
 
+## What It Does
+
+Returns K scores — the percentage of holders who kept or grew their position through volatility. Query any wallet or token, get a trust signal.
+
+```bash
+curl http://localhost:3001/api/v1/wallet/YOUR_WALLET
 ```
-K = (maintained + accumulators) / total holders
+
+```json
+{
+  "address": "...",
+  "k_wallet": 85,
+  "tokens_analyzed": 12,
+  "classification": "accumulator"
+}
 ```
-
-No narrative. Just math.
-
----
-
-## What is K?
-
-K measures who actually holds through chaos.
-
-| Classification | Retention | Meaning |
-|----------------|-----------|---------|
-| **Accumulator** | ≥ 1.5 | Bought more |
-| **Holder** | ≥ 1.0 | Never sold |
-| **Reducer** | ≥ 0.5 | Sold some |
-| **Extractor** | < 0.5 | Paper hands |
-
-**K = % of holders who maintained or accumulated.**
-
-A KOL claims diamond hands? Check their K_wallet.
-
----
-
-## Features
-
-- **Real-time sync** — Helius webhooks + polling fallback
-- **PoH ordering** — Solana slot-based transaction ordering
-- **K_wallet** — Global conviction score across all PumpFun tokens
-- **Pool detection** — Hide Raydium/Orca/Meteora liquidity
-- **SQLite storage** — Native Node.js 22, no dependencies
-
----
 
 ## Quick Start
 
 ```bash
-# Requirements: Node.js 22+
-node -v  # v22.x.x
+# Clone
+git clone https://github.com/zeyxx/asdf-oracle.git
+cd asdf-oracle
 
-# Setup
+# Configure
 cp .env.example .env
-# Add your HELIUS_API_KEY and TOKEN_MINT
+# Add HELIUS_API_KEY and TOKEN_MINT
 
-# Run
+# Run (Node.js 22+ required)
 npm start
-# or
-./start.sh
 ```
 
-Dashboard: `http://localhost:3001`
+Server runs at `http://localhost:3001`
 
----
+## Requirements
 
-## API
+- Node.js 22+
+- Helius API key
+- Token mint address (the token you're tracking)
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /k-metric` | Current K + holder stats |
-| `GET /k-metric/holders` | All holders with classifications |
-| `GET /k-metric/wallet/:addr` | Single wallet data |
-| `GET /k-metric/wallet/:addr/k-global` | K_wallet (all PumpFun tokens) |
-| `GET /k-metric/status` | Sync status |
-| `POST /k-metric/webhook` | Helius webhook receiver |
+## API Reference
 
----
+### Public Endpoints
+
+| Method | Endpoint | What It Does |
+|--------|----------|--------------|
+| GET | `/api/v1/status` | Oracle health + queue stats |
+| GET | `/api/v1/token/:mint` | K score for any PumpFun token |
+| GET | `/api/v1/wallet/:addr` | Wallet conviction scores |
+
+### Batch Endpoints (API Key Required)
+
+| Method | Endpoint | What It Does | Limit |
+|--------|----------|--------------|-------|
+| POST | `/api/v1/wallets` | Bulk wallet lookup | 100 |
+| POST | `/api/v1/tokens` | Bulk token lookup | 50 |
+| GET | `/api/v1/holders` | Filter holders by K score | - |
+
+### Webhooks
+
+Subscribe to events: `k_change`, `holder_new`, `holder_exit`, `threshold_alert`
+
+| Method | Endpoint | What It Does |
+|--------|----------|--------------|
+| POST | `/api/v1/webhooks` | Create subscription |
+| GET | `/api/v1/webhooks` | List your webhooks |
+| DELETE | `/api/v1/webhooks/:id` | Remove subscription |
+
+## Authentication
+
+Header: `X-Oracle-Key: your_api_key`
+
+| Tier | Requests/min | Requests/day |
+|------|--------------|--------------|
+| public (no key) | 100 | 10,000 |
+| free | 500 | 50,000 |
+| standard | 1,000 | 100,000 |
+| premium | 5,000 | 500,000 |
+| internal | unlimited | unlimited |
+
+Rate limit headers included in every response:
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 87
+X-RateLimit-Reset: 1703350800
+X-RateLimit-Tier: public
+```
 
 ## Environment
 
 ```env
+# Required
 HELIUS_API_KEY=your_key
-HELIUS_WEBHOOK_SECRET=your_secret  # Required in production
-TOKEN_MINT=your_token_mint
-NODE_ENV=production                # Enables security checks
+TOKEN_MINT=token_to_track
+
+# Production
+HELIUS_WEBHOOK_SECRET=your_secret
+NODE_ENV=production
+ADMIN_KEY=your_admin_key
 ```
 
----
+## Error Codes
+
+| Code | Meaning |
+|------|---------|
+| 400 | Invalid address format |
+| 401 | Missing or invalid API key |
+| 403 | Access denied (holder gating) |
+| 429 | Rate limit exceeded |
+| 500 | Internal error |
+| 503 | Maintenance mode |
+
+## Troubleshooting
+
+**"No wallet data found"**
+- Run `npm run backfill` for initial sync
+
+**Rate limited immediately?**
+- Public tier is 100/min. Get an API key for higher limits.
+
+**K_wallet returns 202?**
+- Calculation queued. Retry after `retry_after` seconds.
+
+**Webhook not receiving events?**
+- Check `/api/v1/webhooks/:id/deliveries` for failure logs
+- Verify HMAC signature validation on your end
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Helius    │────▶│   server    │────▶│   SQLite    │
-│  webhooks   │     │   + sync    │     │    (PoH)    │
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                           ▼
-                    ┌─────────────┐
-                    │  Dashboard  │
-                    │  (static)   │
-                    └─────────────┘
+Helius ──webhook──▶ server ──▶ SQLite (PoH ordered)
+           │           │
+       polling         ├──▶ K calculator
+       fallback        ├──▶ Wallet scorer (queue)
+                       ├──▶ Token scorer (queue)
+                       └──▶ Webhook dispatcher
 ```
 
----
+No external dependencies. Native Node.js 22 + SQLite.
 
-## Security
+## Related
 
-- **CORS** — Whitelist-based (localhost, Codespaces, Render, alonisthe.dev)
-- **Webhook** — HMAC signature verification required in production
-- **Rate limiting** — 100 req/min per IP
-- **Input validation** — Address format, payload size
-- **Backups** — Automatic every 6 hours
+- [asdf-burn-engine](https://github.com/zeyxx/asdf-burn-engine) — Burns based on K
+- [asdf-validator](https://github.com/zeyxx/asdf-validator) — Fee tracking
 
 ---
 
-## Part of the Optimistic Burn Protocol
-
-This dashboard feeds into the $ASDFASDFA ecosystem:
-
-- **[asdf-validator](https://github.com/zeyxx/asdf-validator)** — Fee tracking
-- **[asdf-burn-engine](https://github.com/zeyxx/asdf-burn-engine)** — Automatic burns
-
-K-Metric proves conviction. Burns reward it.
-
----
-
-## Contributing
-
-Prototype for [alonisthe.dev](https://alonisthe.dev) by [@gcrtrd](https://x.com/gcrtrd).
-
----
-
-*price is noise · K is signal · 🔥 this is fine*
+*this is fine*
