@@ -16,7 +16,6 @@ import sync from './sync.js';
 import walletScore from './wallet-score.js';
 import tokenScore from './token-score.js';
 import gating from './gating.js';
-import kolscan from './kolscan.js';
 import { loadEnv, log } from './utils.js';
 import webhooks from './webhooks.js';
 
@@ -43,7 +42,6 @@ const routes = {
   'POST /k-metric/sync': handleSync,
   'POST /k-metric/backup': handleBackup,
   // Admin routes
-  'GET /k-metric/admin/kols': handleAdminKOLs,
   'POST /k-metric/admin/batch-k': handleAdminBatchK,
   'POST /k-metric/admin/backfill-k-wallet': handleAdminBackfillKWallet,
   'GET /k-metric/admin/k-wallet-queue': handleAdminKWalletQueue,
@@ -477,44 +475,8 @@ function requireAdmin(req) {
 }
 
 /**
- * GET /k-metric/admin/kols - Get KOL wallets from KOLscan (admin only)
- */
-async function handleAdminKOLs(req, res) {
-  try {
-    if (!requireAdmin(req)) {
-      return sendJson(res, 401, { error: 'Admin access required', hint: 'Set X-Admin-Key header' });
-    }
-
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const limit = parseInt(url.searchParams.get('limit') || '50');
-    const category = url.searchParams.get('category') || null;
-
-    // Check KOLscan availability
-    if (!kolscan.isAvailable()) {
-      return sendJson(res, 503, {
-        error: 'KOLscan not configured',
-        hint: 'Set KOLSCAN_API_KEY in environment',
-        status: kolscan.getStatus()
-      });
-    }
-
-    const kols = await kolscan.fetchKOLWallets({ limit, category });
-
-    sendJson(res, 200, {
-      kols,
-      count: kols.length,
-      source: 'kolscan',
-      kolscan_status: kolscan.getStatus()
-    });
-  } catch (error) {
-    log('ERROR', `Admin KOLs error: ${error.message}`);
-    sendJson(res, 500, { error: error.message });
-  }
-}
-
-/**
  * POST /k-metric/admin/batch-k - Batch K_wallet calculation for multiple wallets (admin only)
- * Body: { wallets: ["addr1", "addr2", ...] } or { source: "kolscan", limit: 50 }
+ * Body: { wallets: ["addr1", "addr2", ...] }
  */
 async function handleAdminBatchK(req, res) {
   try {
@@ -524,21 +486,13 @@ async function handleAdminBatchK(req, res) {
 
     let wallets = [];
 
-    // Get wallets from body or KOLscan
-    if (req.body.source === 'kolscan') {
-      if (!kolscan.isAvailable()) {
-        return sendJson(res, 503, { error: 'KOLscan not configured' });
-      }
-      const kols = await kolscan.fetchKOLWallets({ limit: req.body.limit || 50 });
-      wallets = kols.map(k => ({ address: k.address, name: k.name, source: 'kolscan' }));
-    } else if (Array.isArray(req.body.wallets)) {
+    if (Array.isArray(req.body.wallets)) {
       wallets = req.body.wallets.map(addr => ({
         address: typeof addr === 'string' ? addr : addr.address,
-        name: typeof addr === 'string' ? null : addr.name,
-        source: 'manual'
+        name: typeof addr === 'string' ? null : addr.name
       }));
     } else {
-      return sendJson(res, 400, { error: 'Provide wallets array or source: "kolscan"' });
+      return sendJson(res, 400, { error: 'Provide wallets array' });
     }
 
     // Validate addresses
